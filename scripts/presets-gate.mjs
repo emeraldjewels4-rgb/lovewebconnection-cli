@@ -14,10 +14,12 @@ import {
   PresetsHistoryArgError,
   comparePresetHistory,
   parsePresetHistoryArgs,
+  parseRetentionMs,
   presetComparisonMarkdown,
   presetRegressionWarnings,
   providerRegressionWarnings,
   readPresetHistory,
+  retentionWindowWarnings,
   summarizePresetGate,
   summarizePresetHistory,
 } from "../src/presets-history.ts";
@@ -80,6 +82,28 @@ const markdown = [
   .filter((part) => part !== null)
   .join("\n\n");
 write(`${markdown}\n`);
+
+// CI caps the file at RETAIN_WINDOW, so a gate or comparison window that
+// reaches past it is missing runs for a reason that is not provider failure.
+const retainRaw = process.env.RETAIN_WINDOW ?? "";
+let retainMs = null;
+if (retainRaw !== "") {
+  try {
+    retainMs = parseRetentionMs(retainRaw);
+  } catch (error) {
+    usage(error instanceof Error ? error.message : String(error));
+  }
+}
+for (const warning of retentionWindowWarnings(
+  records.at(-1)?.at ?? null,
+  retainMs,
+  [
+    { label: "the gate window", since: args.since },
+    { label: "the comparison window", since: comparison?.before.since ?? null },
+  ],
+)) {
+  console.log(`::warning title=Retention window::${escapeAnnotation(warning)}`);
+}
 
 // A regression is not a gate failure on its own, but it is the thing a provider
 // change is judged on, so it gets its own annotation in the run log.

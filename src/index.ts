@@ -378,6 +378,7 @@ export {
   presetRegressionWarnings,
   presetsBelowUptime,
   providerRegressionWarnings,
+  retentionWindowWarnings,
   readPresetHistory,
   savePresetHistory,
   savePresetHistoryCsv,

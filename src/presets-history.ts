@@ -194,6 +194,34 @@ function recordKey(value: unknown): string {
  * runs the other may have lost, so restore their union instead of whichever
  * file happens to be longer. Identical runs are kept once, oldest first.
  */
+/**
+ * Warns when a window being read starts before the runs retention kept.
+ *
+ * A trimmed history looks exactly like a provider that went quiet: the earlier
+ * side of a comparison has no runs for it, so its uptime is missing and no
+ * regression is reported. Naming the cutoff keeps that silence from being read
+ * as an outage.
+ */
+export function retentionWindowWarnings(
+  newestAt: string | null,
+  retainMs: number | null,
+  windows: Array<{ label: string; since: number | null }>,
+): string[] {
+  if (newestAt === null || retainMs === null) return [];
+  const cutoff = Date.parse(newestAt) - retainMs;
+  const retainedFrom = stamp(new Date(cutoff).toISOString());
+
+  return windows
+    .filter(
+      (window): window is { label: string; since: number } =>
+        window.since !== null && window.since < cutoff,
+    )
+    .map(
+      (window) =>
+        `${window.label} starts at ${stamp(new Date(window.since).toISOString())}, before the history retention keeps (${retainedFrom}); runs missing from it may have been pruned by --retain, not failed.`,
+    );
+}
+
 export function mergePresetHistory(
   inputs: PresetHistoryRecord[][],
   options: { retainMs?: number | null } = {},

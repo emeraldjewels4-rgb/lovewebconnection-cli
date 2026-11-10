@@ -11,6 +11,7 @@ import {
   formatPresetHistory,
   formatPresetHistoryComparison,
   mergePresetHistory,
+  retentionWindowWarnings,
   parsePresetHistoryArgs,
   presetHistoryCsv,
   presetComparisonMarkdown,
@@ -353,6 +354,28 @@ test("parses --retain as a span that bounds the merged history", () => {
       argv.join(" "),
     );
   }
+});
+
+test("a window older than the retained history is explained, not read as silence", () => {
+  const newest = "2026-11-09T06:17:00.000Z";
+  const retainMs = 7 * 86_400_000;
+
+  assert.deepEqual(retentionWindowWarnings(newest, null, [{ label: "--compare", since: 0 }]), []);
+  assert.deepEqual(
+    retentionWindowWarnings(newest, retainMs, [
+      { label: "--since", since: Date.parse("2026-11-08T00:00:00Z") },
+    ]),
+    [],
+  );
+
+  const warnings = retentionWindowWarnings(newest, retainMs, [
+    { label: "--since", since: Date.parse("2026-11-08T00:00:00Z") },
+    { label: "--compare", since: Date.parse("2026-10-01T00:00:00Z") },
+  ]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /--compare starts at 2026-10-01 00:00/);
+  assert.match(warnings[0] ?? "", /before the history retention keeps \(2026-11-02 06:17\)/);
+  assert.match(warnings[0] ?? "", /pruned by --retain, not failed/);
 });
 
 test("parses --merge inputs and --out as one combined history", () => {

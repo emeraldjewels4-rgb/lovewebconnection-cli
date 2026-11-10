@@ -190,7 +190,12 @@ a cache copy and a published copy become one record without a separate script.
 run, pruning older runs as it writes — the workflow publishes six months — and
 because the window follows the newest run rather than the clock, a paused
 schedule cannot prune the record it stopped updating. Keep the span longer than
-any comparison window you still want to read.
+any window you still want to read: when `--since` or `--compare` reaches past
+the retained history, the CLI warns on stderr, and CI turns a `RETAIN_WINDOW`
+shorter than its gate or comparison window into a
+`::warning title=Retention window::` annotation — a pruned run is not a
+provider that went dark.
+
 The union is deduplicated by the whole run record: two copies of a run collapse,
 while runs recorded at the same instant with different results both stay. Every
 filter applies to the union, so `--since`, `--fail-under`, `--compare` and the
@@ -233,9 +238,10 @@ lwc presets-history mine.jsonl --merge laptop.jsonl --merge server.jsonl \
 
 The workflow does this through `scripts/presets-history-merge.mjs`, which skips
 a missing release instead of failing the restore and passes `--retain 180d`, so
-the asset holds six months rather than growing without limit. Cache entries expire after a
-week of no use and a paused schedule would lose the trend; the release keeps the
-whole record, which is what makes month-over-month windows possible away from CI:
+the asset holds six months rather than growing without limit. Cache entries
+expire after a week of no use and a paused schedule would lose the trend; the
+release keeps the whole record, which is what makes month-over-month windows
+possible away from CI:
 
 ```bash
 gh release download preset-history --pattern presets.jsonl \

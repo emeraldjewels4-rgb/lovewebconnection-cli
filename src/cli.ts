@@ -183,6 +183,7 @@ import {
   presetHistoryTimelineCsv,
   presetsBelowUptime,
   readPresetHistory,
+  retentionWindowWarnings,
   savePresetHistory,
   savePresetHistoryCsv,
   summarizePresetHistory,
@@ -336,6 +337,16 @@ if (isPresetHistory) {
       console.error(
         `merged ${history.length} run${history.length === 1 ? "" : "s"} from ${merged.counts.length} file${merged.counts.length === 1 ? "" : "s"}${dropped}${pruned}`,
       );
+    }
+    // A window that reaches past the retained history is missing runs because
+    // --retain pruned them; say so instead of letting a comparison read silence.
+    if (merged !== null && merged.pruned > 0) {
+      for (const warning of retentionWindowWarnings(history.at(-1)?.at ?? null, args.retain, [
+        { label: "--since", since: args.since },
+        { label: "--compare", since: args.compare?.since ?? null },
+      ])) {
+        console.error(`warning: ${warning}`);
+      }
     }
     if (args.out !== null) {
       savePresetHistory(args.out, history);
