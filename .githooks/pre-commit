@@ -1,0 +1,18 @@
+#!/bin/sh
+# Runs before every commit: typecheck first, then the test suite.
+#
+# Installed by `npm install` via the "prepare" script, which points
+# core.hooksPath at this directory. To set it up by hand:
+#   git config core.hooksPath .githooks
+#
+# Skip it for one commit with:
+#   git commit --no-verify
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "pre-commit: typecheck"
+npm run typecheck
+
+echo "pre-commit: tests"
+npm test
