@@ -192,7 +192,10 @@ unreadable window fails too, rather than passing unchecked. Each run also
 publishes a week-over-week comparison: the same presets over the seven days
 before the gate's window, with the percentage-point change per preset and the
 regressions called out in the headline, so a provider switch shows whether it
-helped on the day it takes effect. Cache entries expire after a week of no use,
+helped on the day it takes effect. Every regressed preset also gets a
+`::warning title=Preset regression::` annotation in the run log, so a provider
+that got worse is visible without opening the summary. Cache entries expire
+after a week of no use,
 which shortens the trend window but never the check itself.
 
 `--chain` is global, so one shell can work across networks without editing

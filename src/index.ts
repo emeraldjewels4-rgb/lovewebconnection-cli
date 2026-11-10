@@ -373,6 +373,7 @@ export {
   parsePresetHistoryArgs,
   presetHistoryCsv,
   presetHistoryTimelineCsv,
+  presetRegressionWarnings,
   presetsBelowUptime,
   readPresetHistory,
   savePresetHistoryCsv,

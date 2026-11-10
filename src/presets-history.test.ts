@@ -14,6 +14,7 @@ import {
   presetHistoryCsv,
   presetComparisonMarkdown,
   presetHistoryTimelineCsv,
+  presetRegressionWarnings,
   presetsBelowUptime,
   readPresetHistory,
   summarizePresetGate,
@@ -662,6 +663,38 @@ test("presetComparisonMarkdown renders the delta for a CI summary", () => {
   );
   assert.match(markdown, /\| `ethereum` \| 1 \| 1 \| 100% \| 2 \| 0% \| -100pp \|/);
   assert.match(markdown, /\| `base` \| 8453 \| 1 \| 100% \| 2 \| 100% \| 0pp \|/);
+});
+
+test("presetRegressionWarnings names each preset whose uptime fell", () => {
+  const down = { ok: false, latencyMs: null, blockNumber: null, error: "down" };
+  const comparison = comparePresetHistory(
+    [
+      record("2026-11-01T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1)]),
+      record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1, down)]),
+      record("2026-11-09T06:17:00.000Z", [
+        endpoint("base", 8453),
+        endpoint("ethereum", 1, down),
+        endpoint("polygon", 137),
+      ]),
+    ],
+    { since: Date.parse("2026-11-08T00:00:00Z") },
+    { since: Date.parse("2026-11-01T00:00:00Z"), until: Date.parse("2026-11-02T00:00:00Z") },
+  );
+
+  // Only the fall: a flat preset and one that is absent earlier are not news.
+  assert.deepEqual(presetRegressionWarnings(comparison), [
+    "ethereum uptime -100pp: 100% over 1 run → 0% over 2 runs",
+  ]);
+
+  const improved = comparePresetHistory(
+    [
+      record("2026-11-01T06:17:00.000Z", [endpoint("base", 8453, down)]),
+      record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+    ],
+    { since: Date.parse("2026-11-08T00:00:00Z") },
+    { since: Date.parse("2026-11-01T00:00:00Z"), until: Date.parse("2026-11-02T00:00:00Z") },
+  );
+  assert.deepEqual(presetRegressionWarnings(improved), []);
 });
 
 test("presetComparisonMarkdown explains what it cannot compare", () => {

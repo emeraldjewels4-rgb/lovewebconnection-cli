@@ -584,6 +584,25 @@ export function presetComparisonMarkdown(
   return lines.join("\n");
 }
 
+/**
+ * One line per preset whose uptime fell, worst first, for a CI annotation. A
+ * provider change that looks fine in this week's numbers still shows up here if
+ * it made any preset worse than the week it replaced.
+ */
+export function presetRegressionWarnings(comparison: PresetsHistoryComparison): string[] {
+  const line = (row: PresetUptimeChange): string | null => {
+    if (row.deltaPct === null || row.deltaPct >= 0 || row.before === null || row.after === null) {
+      return null;
+    }
+    const runs = (count: number): string => `${count} run${count === 1 ? "" : "s"}`;
+    return `${row.preset} uptime ${pp(row.deltaPct)}: ${row.before.uptimePct}% over ${runs(row.before.runs)} → ${row.after.uptimePct}% over ${runs(row.after.runs)}`;
+  };
+
+  return comparison.presets
+    .map(line)
+    .filter((value): value is string => value !== null);
+}
+
 export function toPresetHistoryJson(summary: PresetsHistorySummary): PresetsHistorySummary {
   return summary;
 }

@@ -15,6 +15,7 @@ import {
   comparePresetHistory,
   parsePresetHistoryArgs,
   presetComparisonMarkdown,
+  presetRegressionWarnings,
   readPresetHistory,
   summarizePresetGate,
   summarizePresetHistory,
@@ -78,6 +79,14 @@ const markdown = [
   .filter((part) => part !== null)
   .join("\n\n");
 write(`${markdown}\n`);
+
+// A regression is not a gate failure on its own, but it is the thing a provider
+// change is judged on, so it gets its own annotation in the run log.
+if (comparison !== null) {
+  for (const warning of presetRegressionWarnings(comparison)) {
+    console.log(`::warning title=Preset regression::${escapeAnnotation(warning)}`);
+  }
+}
 
 for (const row of gate.shortfalls) {
   const detail = `${row.preset} uptime ${row.uptimePct}% over ${row.runs} run${row.runs === 1 ? "" : "s"} is below ${args.failUnder}%`;
