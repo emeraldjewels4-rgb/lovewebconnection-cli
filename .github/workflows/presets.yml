@@ -1,0 +1,59 @@
+name: Preset health
+
+# Probes the built-in chain endpoints on a schedule. The test suite runs offline
+# on purpose, so nothing else notices when a public provider starts failing.
+# Runs by hand use the same path.
+
+on:
+  schedule:
+    # 06:17 UTC daily, ahead of the working day in Europe and the US.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preset-health
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: lwc presets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install from the lockfile
+        run: npm ci --no-audit --no-fund
+
+      # The command already exits 1 when any endpoint is unhealthy, so its status
+      # is the verdict. It is captured instead of aborting the step, so the table
+      # still reaches the summary of a failed run.
+      - name: Probe every built-in preset
+        run: |
+          set -uo pipefail
+          status=0
+          node src/cli.ts presets | tee presets.log || status=$?
+
+          {
+            echo "### Built-in preset health"
+            echo
+            echo '```'
+            cat presets.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error::At least one built-in endpoint is unhealthy; see the table above."
+            exit "$status"
+          fi

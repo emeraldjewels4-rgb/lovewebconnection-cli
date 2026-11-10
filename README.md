@@ -6,6 +6,7 @@
      another name, change the slug in both lines. -->
 [![Tests](https://github.com/Fiatgod/lovewebconnection/actions/workflows/tests.yml/badge.svg)](https://github.com/Fiatgod/lovewebconnection/actions/workflows/tests.yml)
 [![Migrations](https://github.com/Fiatgod/lovewebconnection/actions/workflows/migrations.yml/badge.svg)](https://github.com/Fiatgod/lovewebconnection/actions/workflows/migrations.yml)
+[![Preset health](https://github.com/Fiatgod/lovewebconnection/actions/workflows/presets.yml/badge.svg)](https://github.com/Fiatgod/lovewebconnection/actions/workflows/presets.yml)
 
 A read-only EVM chain connection kit. Point it at any EVM-compatible JSON-RPC
 endpoint, prove the connection is live, and build on the same client.
