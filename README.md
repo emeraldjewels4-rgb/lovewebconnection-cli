@@ -124,6 +124,10 @@ lwc presets --json            # machine-readable; exits 1 on any failure
 lwc presets --timeout 5000    # per-endpoint budget in ms (250-120000)
 ```
 
+The scheduled **Preset health** workflow publishes this table to the run summary
+and annotates every failover, so a backup serving a run stays visible in the run
+history instead of hiding in a JSON field.
+
 `--chain` is global, so one shell can work across networks without editing
 `.env`:
 

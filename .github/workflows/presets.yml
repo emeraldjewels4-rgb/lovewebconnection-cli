@@ -37,21 +37,18 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       # The command already exits 1 when any endpoint is unhealthy, so its status
-      # is the verdict. It is captured instead of aborting the step, so the table
-      # still reaches the summary of a failed run.
+      # is the verdict. It is captured instead of aborting the step, so the
+      # summary of a failed run is still written.
       - name: Probe every built-in preset
         run: |
           set -uo pipefail
           status=0
-          node src/cli.ts presets | tee presets.log || status=$?
+          node src/cli.ts presets --json > presets.json || status=$?
 
-          {
-            echo "### Built-in preset health"
-            echo
-            echo '```'
-            cat presets.log
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          # The summary names any endpoint that fell back to its backup and
+          # annotates each failover, so a backup taking over shows up in the run
+          # history instead of hiding in a JSON field.
+          node scripts/presets-summary.mjs presets.json
 
           if [ "$status" -ne 0 ]; then
             echo "::error::At least one built-in endpoint is unhealthy; see the table above."

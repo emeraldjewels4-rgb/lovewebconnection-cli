@@ -62,6 +62,7 @@ test("probes every built-in preset and reports each one healthy", async () => {
       endpoint.rpcHost,
       new URL(CHAIN_PRESETS[endpoint.preset]!.rpcUrl).host,
     );
+    assert.equal(endpoint.primaryHost, endpoint.rpcHost, "no failover on a healthy run");
   }
 
   const polygon = report.endpoints.find((endpoint) => endpoint.preset === "polygon");
@@ -137,6 +138,7 @@ test("the table names every preset and summarizes health", () => {
         chainId: 8453,
         nativeSymbol: "ETH",
         rpcHost: "mainnet.base.org",
+        primaryHost: "mainnet.base.org",
         viaFallback: false,
         primaryError: null,
         ok: false,
@@ -149,6 +151,7 @@ test("the table names every preset and summarizes health", () => {
         chainId: 1,
         nativeSymbol: "ETH",
         rpcHost: "cloudflare-eth.com",
+        primaryHost: "ethereum-rpc.publicnode.com",
         viaFallback: true,
         primaryError: "timeout",
         ok: true,
@@ -161,6 +164,7 @@ test("the table names every preset and summarizes health", () => {
         chainId: 196,
         nativeSymbol: "OKB",
         rpcHost: "xlayer.drpc.org",
+        primaryHost: "xlayer.drpc.org",
         viaFallback: false,
         primaryError: null,
         ok: true,
@@ -192,6 +196,7 @@ test("JSON keeps bigints as strings and failures as nulls", () => {
         chainId: 196,
         nativeSymbol: "OKB",
         rpcHost: "xlayer.drpc.org",
+        primaryHost: "xlayer.drpc.org",
         viaFallback: false,
         primaryError: null,
         ok: true,
@@ -204,6 +209,7 @@ test("JSON keeps bigints as strings and failures as nulls", () => {
         chainId: 8453,
         nativeSymbol: "ETH",
         rpcHost: "mainnet.base.org",
+        primaryHost: "mainnet.base.org",
         viaFallback: false,
         primaryError: null,
         ok: false,

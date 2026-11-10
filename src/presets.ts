@@ -26,6 +26,8 @@ export interface PresetProbeResult {
   nativeSymbol: string;
   /** Host that answered: the backup endpoint when the primary could not. */
   rpcHost: string;
+  /** Host of the configured (primary) endpoint, for failover reporting. */
+  primaryHost: string;
   /** True when the primary failed and the backup answered instead. */
   viaFallback: boolean;
   /** Why the primary was skipped, when viaFallback is true. */
@@ -97,6 +99,7 @@ export async function probePresets(deps: PresetProbeDeps = {}): Promise<PresetsR
         preset: name,
         chainId: preset.chainId,
         nativeSymbol: preset.nativeSymbol,
+        primaryHost: hostOf(preset.rpcUrl),
       };
 
       try {

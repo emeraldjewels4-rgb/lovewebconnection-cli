@@ -359,3 +359,7 @@ export type {
   PresetProbeResult,
   PresetsReport,
 } from "./presets.ts";
+
+export { escapeAnnotation, summarizePresets } from "./presets-summary.ts";
+
+export type { PresetsSummary } from "./presets-summary.ts";
