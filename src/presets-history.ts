@@ -903,6 +903,10 @@ export interface PresetsHistoryArgs {
   timelinePath: string | null;
   /** The earlier window from --compare, or null to report one window. */
   compare: PresetsHistoryWindow | null;
+  /** Extra history files from --merge, folded into `path` before anything reads it. */
+  merge: string[];
+  /** Where --out writes the merged history, or null to only read it. */
+  out: string | null;
 }
 
 const SINCE_UNITS_MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
@@ -940,6 +944,8 @@ export function parsePresetHistoryArgs(
   let csvPath: string | null = null;
   let timelinePath: string | null = null;
   let compare: PresetsHistoryWindow | null = null;
+  const merge: string[] = [];
+  let out: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
@@ -1017,6 +1023,27 @@ export function parsePresetHistoryArgs(
       const to = parseBound(parts[1], now, "--compare");
       if (to < from) throw new PresetsHistoryArgError("--compare must start before it ends.");
       compare = { since: from, until: to };
+    } else if (arg === "--merge" || arg.startsWith("--merge=")) {
+      const inline = arg.startsWith("--merge=") ? arg.slice("--merge=".length) : null;
+      const value = inline ?? argv[index + 1] ?? "";
+      if (inline === null) index += 1;
+      if (!value) {
+        throw new PresetsHistoryArgError("--merge requires a history file to fold in.");
+      }
+      merge.push(value);
+    } else if (arg === "--out" || arg.startsWith("--out=")) {
+      const inline = arg.startsWith("--out=") ? arg.slice("--out=".length) : null;
+      const value = inline ?? argv[index + 1] ?? "";
+      if (inline === null) index += 1;
+      if (!value) {
+        throw new PresetsHistoryArgError("--out requires a path for the merged history.");
+      }
+      if (value === "-") {
+        throw new PresetsHistoryArgError(
+          "--out writes history JSONL, so it needs a file path; - is already the table's output.",
+        );
+      }
+      out = value;
     } else if (arg.startsWith("-")) {
       throw new PresetsHistoryArgError(`unexpected flag "${arg}".`);
     } else if (path !== null) {
@@ -1032,6 +1059,11 @@ export function parsePresetHistoryArgs(
   }
   if (csvPath !== null && timelinePath !== null) {
     throw new PresetsHistoryArgError("--csv and --timeline are different exports; pass one.");
+  }
+  if (out !== null && merge.length === 0) {
+    throw new PresetsHistoryArgError(
+      "--out writes the combined history, so pass at least one --merge <file>.",
+    );
   }
   if (compare !== null) {
     if (csvPath !== null || timelinePath !== null) {
@@ -1051,7 +1083,7 @@ export function parsePresetHistoryArgs(
       throw new PresetsHistoryArgError("--compare must end at or before --since.");
     }
   }
-  return { path, since, until, limit, failUnder, csvPath, timelinePath, compare };
+  return { path, since, until, limit, failUnder, csvPath, timelinePath, compare, merge, out };
 }
 
 export type { PresetsReport, PresetEndpoint };

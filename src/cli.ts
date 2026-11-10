@@ -177,11 +177,13 @@ import {
   comparePresetHistory,
   formatPresetHistory,
   formatPresetHistoryComparison,
+  mergePresetHistory,
   parsePresetHistoryArgs,
   presetHistoryCsv,
   presetHistoryTimelineCsv,
   presetsBelowUptime,
   readPresetHistory,
+  savePresetHistory,
   savePresetHistoryCsv,
   summarizePresetHistory,
   toPresetHistoryJson,
@@ -303,7 +305,37 @@ if (isPresetHistory) {
     const args = parsePresetHistoryArgs(flags);
     historyPath = args.path;
     const records = readPresetHistory(historyPath);
-    const summary = summarizePresetHistory(records, {
+    // --merge folds other copies in before anything reads them, so a window,
+    // a gate and an export all judge the same combined record.
+    const extras = args.merge.map((path) => {
+      try {
+        return readPresetHistory(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+          throw new PresetsHistoryArgError(`no history at ${path} to merge.`);
+        }
+        throw error;
+      }
+    });
+    const merged = extras.length === 0 ? null : mergePresetHistory([records, ...extras]);
+    const history = merged === null ? records : merged.records;
+
+    // Notes go to stderr so --json on stdout stays one parseable document.
+    if (merged !== null) {
+      const dropped =
+        merged.duplicates === 0
+          ? ""
+          : `, ${merged.duplicates} duplicate${merged.duplicates === 1 ? "" : "s"} dropped`;
+      console.error(
+        `merged ${history.length} run${history.length === 1 ? "" : "s"} from ${merged.counts.length} file${merged.counts.length === 1 ? "" : "s"}${dropped}`,
+      );
+    }
+    if (args.out !== null) {
+      savePresetHistory(args.out, history);
+      console.error(`wrote ${history.length} runs → ${args.out}`);
+    }
+
+    const summary = summarizePresetHistory(history, {
       since: args.since,
       until: args.until,
       limit: args.limit,
@@ -312,13 +344,13 @@ if (isPresetHistory) {
       args.compare === null
         ? null
         : comparePresetHistory(
-            records,
+            history,
             { since: args.since, until: args.until },
             args.compare,
           );
 
     if (args.timelinePath !== null) {
-      const csv = presetHistoryTimelineCsv(records, {
+      const csv = presetHistoryTimelineCsv(history, {
         since: args.since,
         until: args.until,
         limit: args.limit,

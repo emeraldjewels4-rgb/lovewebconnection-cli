@@ -241,6 +241,8 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     csvPath: null,
     timelinePath: null,
     compare: null,
+    merge: [],
+    out: null,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--json"]), {
     path: "history.jsonl",
@@ -251,6 +253,8 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     csvPath: null,
     timelinePath: null,
     compare: null,
+    merge: [],
+    out: null,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--csv", "-"]), {
     path: "history.jsonl",
@@ -261,6 +265,8 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     csvPath: "-",
     timelinePath: null,
     compare: null,
+    merge: [],
+    out: null,
   });
   assert.equal(parsePresetHistoryArgs(["h.jsonl", "--timeline", "-"]).timelinePath, "-");
 
@@ -281,6 +287,53 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
   }
 });
 
+test("parses --merge inputs and --out as one combined history", () => {
+  const args = parsePresetHistoryArgs([
+    "presets.jsonl",
+    "--merge",
+    "laptop.jsonl",
+    "--merge=server.jsonl",
+    "--out",
+    "combined.jsonl",
+  ]);
+
+  assert.deepEqual(args.merge, ["laptop.jsonl", "server.jsonl"]);
+  assert.equal(args.out, "combined.jsonl");
+});
+
+test("--out writes a merge, so it needs a --merge and a file path", () => {
+  assert.throws(
+    () => parsePresetHistoryArgs(["presets.jsonl", "--out", "combined.jsonl"]),
+    /at least one --merge/,
+  );
+  assert.throws(
+    () => parsePresetHistoryArgs(["presets.jsonl", "--merge", "other.jsonl", "--out", "-"]),
+    /needs a file path/,
+  );
+  assert.throws(
+    () => parsePresetHistoryArgs(["presets.jsonl", "--merge"]),
+    /requires a history file/,
+  );
+});
+
+test("a merged history windows the union, not each copy", () => {
+  const cache = [record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)])];
+  const release = [
+    record("2026-11-07T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+  ];
+
+  const merge = mergePresetHistory([cache, release]);
+  const summary = summarizePresetHistory(merge.records, {
+    since: Date.parse("2026-11-08T00:00:00Z"),
+  });
+
+  // The duplicate is dropped before the window applies, so one run survives.
+  assert.equal(summary.totalRuns, 2);
+  assert.equal(summary.runs, 1);
+  assert.equal(summary.presets[0]?.runs, 1);
+});
+
 test("parses --since as an ISO time or a span, and --limit as a positive count", () => {
   const now = Date.parse("2026-11-10T12:00:00Z");
 
@@ -299,6 +352,8 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
     csvPath: null,
     timelinePath: null,
     compare: null,
+    merge: [],
+    out: null,
   });
 
   for (const argv of [
@@ -333,6 +388,8 @@ test("parses --until as a closed end, and rejects an inverted window", () => {
     csvPath: null,
     timelinePath: null,
     compare: null,
+    merge: [],
+    out: null,
   });
 
   for (const argv of [

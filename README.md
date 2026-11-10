@@ -132,6 +132,7 @@ lwc presets-history .lwc-history/presets.jsonl --since 7d --timeline ./timeline.
 lwc presets-history .lwc-history/presets.jsonl --since 7d --compare 14d..7d
 lwc presets-history .lwc-history/presets.jsonl --since 30d --compare 60d..30d
 lwc presets-history .lwc-history/presets.jsonl --since 7d --fail-under 99
+lwc presets-history mine.jsonl --merge laptop.jsonl --out combined.jsonl
 ```
 
 `--history` appends one JSON line per run, and `presets-history` reads them back
@@ -182,6 +183,15 @@ history — a provider that failed two of the last twenty runs is caught even wh
 the newest run was healthy. An empty window fails the gate, since there is no
 run to clear it.
 
+`--merge <file>` (repeatable) folds other history files into the one positional
+file before anything reads it, and `--out <path>` writes the combined JSONL — so
+a cache copy and a published copy become one record without a separate script.
+The union is deduplicated by the whole run record: two copies of a run collapse,
+while runs recorded at the same instant with different results both stay. Every
+filter applies to the union, so `--since`, `--fail-under`, `--compare` and the
+exports all judge the combined history. Merge notes go to stderr, so `--json` on
+stdout remains one parseable document.
+
 The scheduled **Preset health** workflow publishes this table to the run summary,
 annotates every failover, and restores its history file from the Actions cache so
 the trend builds up across runs. It also enforces the gate: every run judges the
@@ -208,14 +218,18 @@ probe appends to and the archive job publishes back after the gate. Restoring
 the union matters because a fresh runner starts with no cache and an entry idle
 for a week is evicted, so the shorter file is not always the staler one.
 
-Any number of history files combine the same way outside CI, which is how two
-machines' copies become one record:
+Combining copies is the same operation away from CI, which is how two machines'
+record becomes one:
 
 ```bash
-node scripts/presets-history-merge.mjs merged.jsonl laptop.jsonl server.jsonl
-``` Cache entries expire after a week of no
-use and a paused schedule would lose the trend; the release keeps the whole
-record, which is what makes month-over-month windows possible away from CI:
+lwc presets-history mine.jsonl --merge laptop.jsonl --merge server.jsonl \
+  --out combined.jsonl --since 30d
+```
+
+The workflow does this through `scripts/presets-history-merge.mjs`, which skips
+a missing release instead of failing the restore. Cache entries expire after a
+week of no use and a paused schedule would lose the trend; the release keeps the
+whole record, which is what makes month-over-month windows possible away from CI:
 
 ```bash
 gh release download preset-history --pattern presets.jsonl \
