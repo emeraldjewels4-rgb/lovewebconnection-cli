@@ -126,6 +126,7 @@ lwc presets --history .lwc-history/presets.jsonl   # append this run
 lwc presets-history .lwc-history/presets.jsonl     # trend across runs
 lwc presets-history .lwc-history/presets.jsonl --since 7d    # this week only
 lwc presets-history .lwc-history/presets.jsonl --limit 20    # the newest 20
+lwc presets-history .lwc-history/presets.jsonl --since 7d --fail-under 99
 ```
 
 `--history` appends one JSON line per run, and `presets-history` reads them back
@@ -138,6 +139,14 @@ single healthy probe.
 incident reads on its own instead of against the whole file. A narrowed view
 says `runs 2 of 30` and prints the window it applied; `--json` carries
 `totalRuns`, `since` and `limit` so a report can state its own scope.
+
+`--fail-under <pct>` turns the view into a gate: it exits 1 when any preset's
+uptime inside the window is below the percentage, naming each offender on stderr
+while the table still goes to stdout. Because it judges the window, pair it with
+`--since`/`--limit` to hold a recent period to a standard rather than all of
+history — a provider that failed two of the last twenty runs is caught even when
+the newest run was healthy. An empty window fails the gate, since there is no
+run to clear it.
 
 The scheduled **Preset health** workflow publishes this table to the run summary,
 annotates every failover, and restores its history file from the Actions cache so

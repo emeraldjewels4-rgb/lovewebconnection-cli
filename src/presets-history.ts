@@ -202,6 +202,30 @@ export function summarizePresetHistory(
   };
 }
 
+/** A preset whose uptime in the window sits below the --fail-under threshold. */
+export interface UptimeShortfall {
+  preset: string;
+  uptimePct: number;
+  runs: number;
+  failed: number;
+}
+
+/** Presets below the threshold, worst first; empty when every preset clears it. */
+export function presetsBelowUptime(
+  summary: PresetsHistorySummary,
+  threshold: number,
+): UptimeShortfall[] {
+  return summary.presets
+    .filter((row) => row.uptimePct < threshold)
+    .map((row) => ({
+      preset: row.preset,
+      uptimePct: row.uptimePct,
+      runs: row.runs,
+      failed: row.failed,
+    }))
+    .sort((a, b) => a.uptimePct - b.uptimePct || a.preset.localeCompare(b.preset));
+}
+
 function stamp(iso: string | null): string {
   return iso === null ? "—" : iso.slice(0, 16).replace("T", " ");
 }
@@ -278,6 +302,8 @@ export interface PresetsHistoryArgs {
   since: number | null;
   /** Newest N runs to keep, or null for all of them. */
   limit: number | null;
+  /** Exit non-zero below this uptime percentage, or null to only report. */
+  failUnder: number | null;
 }
 
 const SINCE_UNITS_MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
@@ -307,6 +333,7 @@ export function parsePresetHistoryArgs(
   let path: string | null = null;
   let since: number | null = null;
   let limit: number | null = null;
+  let failUnder: number | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
@@ -336,6 +363,17 @@ export function parsePresetHistoryArgs(
         );
       }
       limit = Number(value);
+    } else if (arg === "--fail-under" || arg.startsWith("--fail-under=")) {
+      const value = arg.startsWith("--fail-under=")
+        ? arg.slice("--fail-under=".length)
+        : readValue("--fail-under");
+      const percentage = Number(value);
+      if (!/^\d+(\.\d+)?$/.test(value) || percentage > 100) {
+        throw new PresetsHistoryArgError(
+          `--fail-under must be a percentage from 0 to 100, got "${value}".`,
+        );
+      }
+      failUnder = percentage;
     } else if (arg.startsWith("-")) {
       throw new PresetsHistoryArgError(`unexpected flag "${arg}".`);
     } else if (path !== null) {
@@ -346,7 +384,7 @@ export function parsePresetHistoryArgs(
   }
 
   if (path === null) throw new PresetsHistoryArgError("a history file is required.");
-  return { path, since, limit };
+  return { path, since, limit, failUnder };
 }
 
 export type { PresetsReport, PresetEndpoint };

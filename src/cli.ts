@@ -176,6 +176,7 @@ import {
   appendPresetHistory,
   formatPresetHistory,
   parsePresetHistoryArgs,
+  presetsBelowUptime,
   readPresetHistory,
   summarizePresetHistory,
   toPresetHistoryJson,
@@ -305,6 +306,23 @@ if (isPresetHistory) {
         ? JSON.stringify(toPresetHistoryJson(summary), null, 2)
         : formatPresetHistory(summary),
     );
+    // --fail-under is a CI gate over the selected window, not a display option:
+    // an empty window cannot be shown to clear it.
+    if (args.failUnder !== null) {
+      if (summary.runs === 0) {
+        console.error(
+          `error: no runs in the window to check against --fail-under ${args.failUnder}%.`,
+        );
+        process.exit(1);
+      }
+      const shortfalls = presetsBelowUptime(summary, args.failUnder);
+      for (const row of shortfalls) {
+        console.error(
+          `error: ${row.preset} uptime ${row.uptimePct}% over ${row.runs} run${row.runs === 1 ? "" : "s"} is below --fail-under ${args.failUnder}%.`,
+        );
+      }
+      process.exit(shortfalls.length === 0 ? 0 : 1);
+    }
     process.exit(0);
   } catch (error) {
     if (error instanceof PresetsHistoryArgError) {

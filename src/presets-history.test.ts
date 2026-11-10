@@ -9,6 +9,7 @@ import {
   appendPresetHistory,
   formatPresetHistory,
   parsePresetHistoryArgs,
+  presetsBelowUptime,
   readPresetHistory,
   summarizePresetHistory,
   type PresetHistoryRecord,
@@ -176,11 +177,13 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     path: "history.jsonl",
     since: null,
     limit: null,
+    failUnder: null,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--json"]), {
     path: "history.jsonl",
     since: null,
     limit: null,
+    failUnder: null,
   });
 
   for (const argv of [[], ["a.jsonl", "b.jsonl"], ["--bogus"], ["-x"]]) {
@@ -205,6 +208,7 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
     path: "h.jsonl",
     since: now - 7 * 86_400_000,
     limit: 2,
+    failUnder: null,
   });
 
   for (const argv of [
@@ -220,6 +224,57 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
       argv.join(" "),
     );
   }
+});
+
+test("parses --fail-under as a percentage from 0 to 100", () => {
+  assert.equal(parsePresetHistoryArgs(["h.jsonl", "--fail-under", "99"]).failUnder, 99);
+  assert.equal(parsePresetHistoryArgs(["h.jsonl", "--fail-under=66.7"]).failUnder, 66.7);
+  assert.equal(parsePresetHistoryArgs(["h.jsonl", "--fail-under", "0"]).failUnder, 0);
+
+  for (const argv of [
+    ["h.jsonl", "--fail-under", "101"],
+    ["h.jsonl", "--fail-under", "high"],
+    ["h.jsonl", "--fail-under", "-1"],
+    ["h.jsonl", "--fail-under"],
+    ["h.jsonl", "--fail-under="],
+  ]) {
+    assert.throws(
+      () => parsePresetHistoryArgs(argv),
+      (error: unknown) => error instanceof PresetsHistoryArgError,
+      argv.join(" "),
+    );
+  }
+});
+
+test("--fail-under names every preset under the threshold, worst first", () => {
+  const down = endpoint("base", 8453, {
+    ok: false,
+    latencyMs: null,
+    blockNumber: null,
+    error: "down",
+  });
+  const summary = summarizePresetHistory([
+    record("2026-11-10T06:17:00.000Z", [
+      endpoint("base", 8453),
+      endpoint("ethereum", 1, { ...down, preset: "ethereum", chainId: 1 }),
+      endpoint("xlayer", 196),
+    ]),
+    record("2026-11-11T06:17:00.000Z", [
+      endpoint("base", 8453, { ...down, preset: "base", chainId: 8453 }),
+      endpoint("ethereum", 1, { ...down, preset: "ethereum", chainId: 1 }),
+      endpoint("xlayer", 196),
+    ]),
+  ]);
+
+  assert.deepEqual(presetsBelowUptime(summary, 100), [
+    { preset: "ethereum", uptimePct: 0, runs: 2, failed: 2 },
+    { preset: "base", uptimePct: 50, runs: 2, failed: 1 },
+  ]);
+  // Meeting the threshold exactly counts as clearing it.
+  assert.deepEqual(presetsBelowUptime(summary, 50), [
+    { preset: "ethereum", uptimePct: 0, runs: 2, failed: 2 },
+  ]);
+  assert.deepEqual(presetsBelowUptime(summary, 0), []);
 });
 
 test("--since and --limit narrow the summary to the newest runs", () => {
