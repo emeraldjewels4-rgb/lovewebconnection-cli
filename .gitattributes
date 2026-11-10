@@ -1,0 +1,10 @@
+# Line endings. Without this, core.autocrlf on Windows rewrites these files to
+# CRLF on checkout — which breaks shell scripts, and psql scripts whose \if and
+# heredoc bodies must not carry a stray carriage return.
+* text=auto eol=lf
+
+# The files where a CRLF is an actual failure rather than a diff annoyance.
+*.sh  text eol=lf
+*.sql text eol=lf
+*.ts  text eol=lf
+*.mjs text eol=lf
