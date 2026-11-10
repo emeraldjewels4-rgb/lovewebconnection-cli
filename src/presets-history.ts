@@ -917,15 +917,25 @@ export function presetComparisonMarkdown(
     summary.runs === 0
       ? `no runs (${summary.totalRuns} recorded)`
       : `${summary.runs} run${summary.runs === 1 ? "" : "s"} (${stamp(summary.from)} → ${stamp(summary.to)})`;
+  // What the file holds is true of every branch, including the ones with no
+  // earlier runs to compare against.
+  const facts = [
+    ...(coverage === null ? [] : [`Coverage: ${coverage} (${after.totalRuns} recorded).`]),
+    ...(retained === null ? [] : [`Retained: ${retained}.`]),
+  ];
 
   if (after.runs === 0) {
-    lines.push(`**No runs in the current window** — ${span(after)}; nothing to compare.`);
+    lines.push(
+      `**No runs in the current window** — ${span(after)}; nothing to compare.`,
+      ...facts,
+    );
     return lines.join("\n");
   }
 
   if (before.runs === 0) {
     lines.push(
       `**No earlier runs to compare against** — ${span(before)}; the current window is ${span(after)}.`,
+      ...facts,
       ...(short && cutoff !== null
         ? [
             `The earlier window starts before the retained history (${stamp(new Date(cutoff).toISOString())}), so its runs may have been pruned rather than missing.`,
@@ -943,8 +953,7 @@ export function presetComparisonMarkdown(
     `**${regressions.length} regressed, ${improvements.length} improved** across ${comparison.presets.length} preset${comparison.presets.length === 1 ? "" : "s"}.`,
     "",
     `Earlier: ${span(before)} — current: ${span(after)}. Overall uptime ${pp(overall)}.`,
-    ...(coverage === null ? [] : [`Coverage: ${coverage} (${after.totalRuns} recorded).`]),
-    ...(retained === null ? [] : [`Retained: ${retained}.`]),
+    ...facts,
     ...(short && cutoff !== null
       ? [
           `The earlier window starts before the retained history (${stamp(new Date(cutoff).toISOString())}), so its delta only covers the runs that remain.`,

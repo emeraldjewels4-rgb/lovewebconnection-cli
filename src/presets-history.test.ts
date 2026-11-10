@@ -474,6 +474,28 @@ test("the comparison shows the file's coverage and a window older than it", () =
   assert.match(markdown, /earlier window starts before the retained history/);
 });
 
+test("a comparison with no earlier runs still shows coverage and retention", () => {
+  const records = [
+    record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453)]),
+  ];
+  const comparison = comparePresetHistory(
+    records,
+    { since: Date.parse("2026-11-07T00:00:00Z") },
+    {
+      since: Date.parse("2026-10-01T00:00:00Z"),
+      until: Date.parse("2026-10-10T00:00:00Z"),
+    },
+    { retainMs: 3 * 86_400_000 },
+  );
+
+  assert.equal(comparison.before.runs, 0);
+  const markdown = presetComparisonMarkdown(comparison);
+  assert.match(markdown, /Coverage: 2026-11-08 06:17 → 2026-11-09 06:17 \(2 recorded\)/);
+  assert.match(markdown, /Retained: 3 days \(nothing older than 2026-11-06 06:17\)/);
+  assert.match(markdown, /may have been pruned rather than missing/);
+});
+
 test("parses --merge inputs and --out as one combined history", () => {
   const args = parsePresetHistoryArgs([
     "presets.jsonl",
