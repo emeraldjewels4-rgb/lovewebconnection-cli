@@ -9,6 +9,7 @@ import {
   appendPresetHistory,
   formatPresetHistory,
   parsePresetHistoryArgs,
+  presetHistoryCsv,
   presetsBelowUptime,
   readPresetHistory,
   summarizePresetGate,
@@ -180,6 +181,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     until: null,
     limit: null,
     failUnder: null,
+    csvPath: null,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--json"]), {
     path: "history.jsonl",
@@ -187,9 +189,18 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     until: null,
     limit: null,
     failUnder: null,
+    csvPath: null,
+  });
+  assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--csv", "-"]), {
+    path: "history.jsonl",
+    since: null,
+    until: null,
+    limit: null,
+    failUnder: null,
+    csvPath: "-",
   });
 
-  for (const argv of [[], ["a.jsonl", "b.jsonl"], ["--bogus"], ["-x"]]) {
+  for (const argv of [[], ["a.jsonl", "b.jsonl"], ["--bogus"], ["-x"], ["h.jsonl", "--csv"]]) {
     assert.throws(
       () => parsePresetHistoryArgs(argv),
       (error: unknown) => error instanceof PresetsHistoryArgError,
@@ -213,6 +224,7 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
     until: null,
     limit: 2,
     failUnder: null,
+    csvPath: null,
   });
 
   for (const argv of [
@@ -244,6 +256,7 @@ test("parses --until as a closed end, and rejects an inverted window", () => {
     until: now - 86_400_000,
     limit: null,
     failUnder: null,
+    csvPath: null,
   });
 
   for (const argv of [
@@ -488,6 +501,49 @@ test("formatPresetHistory explains an empty window", () => {
 
   assert.match(text, /no runs in this window \(1 recorded\)/);
   assert.match(text, /widen the window or raise --limit/);
+});
+
+test("presetHistoryCsv exports one row per preset with blanks for missing values", () => {
+  const summary = summarizePresetHistory([
+    record("2026-11-10T06:17:00.000Z", [
+      endpoint("base", 8453),
+      endpoint("polygon", 137, {
+        ok: false,
+        latencyMs: null,
+        blockNumber: null,
+        error: "down",
+      }),
+    ]),
+  ]);
+  const lines = presetHistoryCsv(summary).split("\n");
+
+  assert.equal(
+    lines[0],
+    "preset,chain,native,runs,healthy,failed,failovers,uptime_pct,p50_latency_ms,max_latency_ms,last_run,last_failure",
+  );
+  assert.equal(lines[1], "base,8453,ETH,1,1,0,0,100,100,100,2026-11-10T06:17:00.000Z,");
+  assert.equal(
+    lines[2],
+    "polygon,137,POL,1,0,1,0,0,,,2026-11-10T06:17:00.000Z,2026-11-10T06:17:00.000Z",
+  );
+  assert.equal(lines.length, 3, "no trailing blank line");
+});
+
+test("presetHistoryCsv follows the window it is given", () => {
+  const summary = summarizePresetHistory(
+    [
+      record("2026-11-09T06:17:00.000Z", [
+        endpoint("base", 8453, { ok: false, latencyMs: null, blockNumber: null, error: "down" }),
+      ]),
+      record("2026-11-10T06:17:00.000Z", [endpoint("base", 8453, { latencyMs: 40 })]),
+    ],
+    { since: Date.parse("2026-11-10T00:00:00Z") },
+  );
+
+  assert.equal(
+    presetHistoryCsv(summary).split("\n")[1],
+    "base,8453,ETH,1,1,0,0,100,40,40,2026-11-10T06:17:00.000Z,",
+  );
 });
 
 test("a recorded run is what the history view reads back", (t) => {

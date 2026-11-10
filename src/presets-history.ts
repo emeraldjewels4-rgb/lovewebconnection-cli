@@ -1,7 +1,8 @@
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { toPresetsJson, type PresetsReport } from "./presets.ts";
+import { csvCell } from "./scan.ts";
 
 type PresetsJson = ReturnType<typeof toPresetsJson>;
 type PresetEndpoint = PresetsJson["endpoints"][number];
@@ -369,6 +370,46 @@ export function toPresetHistoryJson(summary: PresetsHistorySummary): PresetsHist
   return summary;
 }
 
+/** One CSV row per preset in the window, for charting uptime and latency. */
+export function presetHistoryCsv(summary: PresetsHistorySummary): string {
+  const header = [
+    "preset",
+    "chain",
+    "native",
+    "runs",
+    "healthy",
+    "failed",
+    "failovers",
+    "uptime_pct",
+    "p50_latency_ms",
+    "max_latency_ms",
+    "last_run",
+    "last_failure",
+  ];
+  const rows = summary.presets.map((row) => [
+    csvCell(row.preset),
+    String(row.chainId),
+    csvCell(row.nativeSymbol),
+    String(row.runs),
+    String(row.healthy),
+    String(row.failed),
+    String(row.failovers),
+    String(row.uptimePct),
+    row.p50LatencyMs === null ? "" : String(row.p50LatencyMs),
+    row.maxLatencyMs === null ? "" : String(row.maxLatencyMs),
+    row.lastAt ?? "",
+    row.lastFailureAt ?? "",
+  ]);
+
+  return [header.join(","), ...rows.map((cells) => cells.join(","))].join("\n");
+}
+
+/** Write the CSV to a file, creating its directory. */
+export function savePresetHistoryCsv(path: string, csv: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${csv}\n`);
+}
+
 export interface PresetsHistoryArgs {
   path: string;
   /** Epoch-ms cutoff from --since, or null for the whole file. */
@@ -379,6 +420,8 @@ export interface PresetsHistoryArgs {
   limit: number | null;
   /** Exit non-zero below this uptime percentage, or null to only report. */
   failUnder: number | null;
+  /** Where to write the per-preset CSV, "-" for stdout, or null for the table. */
+  csvPath: string | null;
 }
 
 const SINCE_UNITS_MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
@@ -413,6 +456,7 @@ export function parsePresetHistoryArgs(
   let until: number | null = null;
   let limit: number | null = null;
   let failUnder: number | null = null;
+  let csvPath: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
@@ -461,6 +505,12 @@ export function parsePresetHistoryArgs(
         );
       }
       failUnder = percentage;
+    } else if (arg === "--csv" || arg.startsWith("--csv=")) {
+      const inline = arg.startsWith("--csv=") ? arg.slice("--csv=".length) : null;
+      const value = inline ?? argv[index + 1] ?? "";
+      if (inline === null) index += 1;
+      if (!value) throw new PresetsHistoryArgError("--csv requires a path, or - for stdout.");
+      csvPath = value;
     } else if (arg.startsWith("-")) {
       throw new PresetsHistoryArgError(`unexpected flag "${arg}".`);
     } else if (path !== null) {
@@ -474,7 +524,7 @@ export function parsePresetHistoryArgs(
   if (since !== null && until !== null && until < since) {
     throw new PresetsHistoryArgError("--until must not be earlier than --since.");
   }
-  return { path, since, until, limit, failUnder };
+  return { path, since, until, limit, failUnder, csvPath };
 }
 
 export type { PresetsReport, PresetEndpoint };

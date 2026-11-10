@@ -176,8 +176,10 @@ import {
   appendPresetHistory,
   formatPresetHistory,
   parsePresetHistoryArgs,
+  presetHistoryCsv,
   presetsBelowUptime,
   readPresetHistory,
+  savePresetHistoryCsv,
   summarizePresetHistory,
   toPresetHistoryJson,
 } from "./presets-history.ts";
@@ -302,11 +304,22 @@ if (isPresetHistory) {
       until: args.until,
       limit: args.limit,
     });
-    console.log(
-      asJson
-        ? JSON.stringify(toPresetHistoryJson(summary), null, 2)
-        : formatPresetHistory(summary),
-    );
+    if (args.csvPath !== null) {
+      const csv = presetHistoryCsv(summary);
+      if (args.csvPath === "-") {
+        console.log(csv);
+      } else {
+        savePresetHistoryCsv(args.csvPath, csv);
+        const rows = summary.presets.length;
+        console.log(`wrote ${rows} row${rows === 1 ? "" : "s"} → ${args.csvPath}`);
+      }
+    } else {
+      console.log(
+        asJson
+          ? JSON.stringify(toPresetHistoryJson(summary), null, 2)
+          : formatPresetHistory(summary),
+      );
+    }
     // --fail-under is a CI gate over the selected window, not a display option:
     // an empty window cannot be shown to clear it.
     if (args.failUnder !== null) {
