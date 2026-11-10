@@ -9,6 +9,11 @@ on:
     # 06:17 UTC daily, ahead of the working day in Europe and the US.
     - cron: "17 6 * * *"
   workflow_dispatch:
+    inputs:
+      fail_under:
+        description: Minimum uptime percentage over the window
+        required: false
+        default: "95"
 
 permissions:
   contents: read
@@ -22,6 +27,12 @@ jobs:
     name: lwc presets
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    env:
+      # Overridable by hand; 95% leaves room for one bad run in twenty while
+      # still catching a provider that has been flaky all week.
+      FAIL_UNDER: ${{ github.event.inputs.fail_under || '95' }}
+      FAIL_WINDOW: 7d
 
     steps:
       - name: Check out
@@ -70,3 +81,12 @@ jobs:
             echo "::error::At least one built-in endpoint is unhealthy; see the table above."
             exit "$status"
           fi
+
+      # A healthy run can follow a flaky week, so the gate holds the recent
+      # window to a minimum uptime and fails the job when a preset has been
+      # below it. An empty window or unreadable history fails too: neither can
+      # show the threshold was met. `always()` keeps the outcome in the summary
+      # even when the probe above already failed.
+      - name: Check uptime over the window
+        if: always()
+        run: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since "$FAIL_WINDOW" --fail-under "$FAIL_UNDER"

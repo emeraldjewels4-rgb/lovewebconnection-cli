@@ -150,8 +150,14 @@ run to clear it.
 
 The scheduled **Preset health** workflow publishes this table to the run summary,
 annotates every failover, and restores its history file from the Actions cache so
-the trend builds up across runs. Cache entries expire after a week of no use,
-which shortens the trend window but never the check itself.
+the trend builds up across runs. It also enforces the gate: every run judges the
+last week of history against `--fail-under` (95% by default, settable when
+starting the workflow by hand), writes a PASS/FAIL section naming any preset
+below it, and fails the job — so a provider that has been flaky all week turns
+the schedule red even when that morning's probe happened to answer. An empty or
+unreadable window fails too, rather than passing unchecked. Cache entries expire
+after a week of no use, which shortens the trend window but never the check
+itself.
 
 `--chain` is global, so one shell can work across networks without editing
 `.env`:

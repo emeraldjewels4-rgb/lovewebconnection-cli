@@ -11,6 +11,7 @@ import {
   parsePresetHistoryArgs,
   presetsBelowUptime,
   readPresetHistory,
+  summarizePresetGate,
   summarizePresetHistory,
   type PresetHistoryRecord,
 } from "./presets-history.ts";
@@ -267,14 +268,79 @@ test("--fail-under names every preset under the threshold, worst first", () => {
   ]);
 
   assert.deepEqual(presetsBelowUptime(summary, 100), [
-    { preset: "ethereum", uptimePct: 0, runs: 2, failed: 2 },
-    { preset: "base", uptimePct: 50, runs: 2, failed: 1 },
+    { preset: "ethereum", chainId: 1, uptimePct: 0, runs: 2, failed: 2 },
+    { preset: "base", chainId: 8453, uptimePct: 50, runs: 2, failed: 1 },
   ]);
   // Meeting the threshold exactly counts as clearing it.
   assert.deepEqual(presetsBelowUptime(summary, 50), [
-    { preset: "ethereum", uptimePct: 0, runs: 2, failed: 2 },
+    { preset: "ethereum", chainId: 1, uptimePct: 0, runs: 2, failed: 2 },
   ]);
   assert.deepEqual(presetsBelowUptime(summary, 0), []);
+});
+
+test("the gate report passes a window every preset cleared", () => {
+  const summary = summarizePresetHistory([
+    record("2026-11-10T06:17:00.000Z", [endpoint("base", 8453), endpoint("xlayer", 196)]),
+  ]);
+  const gate = summarizePresetGate(summary, 95);
+
+  assert.equal(gate.passed, true);
+  assert.equal(gate.threshold, 95);
+  assert.deepEqual(gate.shortfalls, []);
+  assert.match(gate.markdown, /^### Preset uptime gate/);
+  assert.match(
+    gate.markdown,
+    /\*\*PASS\*\* — all 2 presets stayed at or above 95% across 1 run \(2026-11-10 06:17 → 2026-11-10 06:17\)\./,
+  );
+});
+
+test("the gate report lists each preset below the threshold", () => {
+  const down = {
+    ok: false,
+    latencyMs: null,
+    blockNumber: null,
+    error: "down",
+  };
+  const summary = summarizePresetHistory(
+    [
+      record("2026-11-09T06:17:00.000Z", [
+        endpoint("base", 8453, down),
+        endpoint("ethereum", 1, down),
+      ]),
+      record("2026-11-10T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1, down)]),
+    ],
+    { since: Date.parse("2026-11-09T00:00:00Z"), limit: 2 },
+  );
+  const gate = summarizePresetGate(summary, 100);
+
+  assert.equal(gate.passed, false);
+  assert.deepEqual(
+    gate.shortfalls.map((row) => [row.preset, row.uptimePct]),
+    [
+      ["ethereum", 0],
+      ["base", 50],
+    ],
+  );
+  assert.match(
+    gate.markdown,
+    /\*\*FAIL\*\* — 2 presets below 100% across 2 runs \(2026-11-09 06:17 → 2026-11-10 06:17\), since 2026-11-09 00:00, newest 2\./,
+  );
+  assert.match(gate.markdown, /\| `ethereum` \| 1 \| 2 \| 0% \| 2 \|/);
+  assert.match(gate.markdown, /\| `base` \| 8453 \| 2 \| 50% \| 1 \|/);
+});
+
+test("the gate cannot pass an empty window", () => {
+  const summary = summarizePresetHistory(
+    [record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)])],
+    { since: Date.parse("2026-11-09T00:00:00Z") },
+  );
+  const gate = summarizePresetGate(summary, 80);
+
+  assert.equal(gate.passed, false);
+  assert.match(
+    gate.markdown,
+    /no runs in the window \(1 recorded\), so a 80% minimum cannot be verified/,
+  );
 });
 
 test("--since and --limit narrow the summary to the newest runs", () => {

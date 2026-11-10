@@ -369,7 +369,9 @@ export {
   appendPresetHistory,
   formatPresetHistory,
   parsePresetHistoryArgs,
+  presetsBelowUptime,
   readPresetHistory,
+  summarizePresetGate,
   summarizePresetHistory,
   toPresetHistoryJson,
 } from "./presets-history.ts";
@@ -377,5 +379,7 @@ export {
 export type {
   PresetHistoryRecord,
   PresetHistoryRow,
+  PresetsGateReport,
   PresetsHistorySummary,
+  UptimeShortfall,
 } from "./presets-history.ts";

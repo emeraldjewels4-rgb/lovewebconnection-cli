@@ -205,6 +205,7 @@ export function summarizePresetHistory(
 /** A preset whose uptime in the window sits below the --fail-under threshold. */
 export interface UptimeShortfall {
   preset: string;
+  chainId: number;
   uptimePct: number;
   runs: number;
   failed: number;
@@ -219,11 +220,71 @@ export function presetsBelowUptime(
     .filter((row) => row.uptimePct < threshold)
     .map((row) => ({
       preset: row.preset,
+      chainId: row.chainId,
       uptimePct: row.uptimePct,
       runs: row.runs,
       failed: row.failed,
     }))
     .sort((a, b) => a.uptimePct - b.uptimePct || a.preset.localeCompare(b.preset));
+}
+
+export interface PresetsGateReport {
+  /** False when any preset is below the threshold or the window is empty. */
+  passed: boolean;
+  threshold: number;
+  shortfalls: UptimeShortfall[];
+  /** The outcome as markdown for a CI run summary. */
+  markdown: string;
+}
+
+/**
+ * Judge a window against a minimum uptime for CI: markdown for the run summary
+ * plus the verdict the caller exits on. An empty window fails, because there is
+ * no run left that could clear the threshold.
+ */
+export function summarizePresetGate(
+  summary: PresetsHistorySummary,
+  threshold: number,
+): PresetsGateReport {
+  const shortfalls = presetsBelowUptime(summary, threshold);
+  const lines = ["### Preset uptime gate", ""];
+
+  if (summary.runs === 0) {
+    lines.push(
+      `**FAIL** — no runs in the window (${summary.totalRuns} recorded), so a ${threshold}% minimum cannot be verified.`,
+    );
+    return { passed: false, threshold, shortfalls, markdown: lines.join("\n") };
+  }
+
+  const filter = [
+    summary.since === null ? null : `since ${stamp(new Date(summary.since).toISOString())}`,
+    summary.limit === null ? null : `newest ${summary.limit}`,
+  ].filter((part): part is string => part !== null);
+  const runs = `${summary.runs} run${summary.runs === 1 ? "" : "s"} (${stamp(summary.from)} → ${stamp(summary.to)})`;
+  const scope = filter.length === 0 ? runs : `${runs}, ${filter.join(", ")}`;
+
+  if (shortfalls.length === 0) {
+    const presets = `${summary.presets.length} preset${summary.presets.length === 1 ? "" : "s"}`;
+    lines.push(`**PASS** — all ${presets} stayed at or above ${threshold}% across ${scope}.`);
+  } else {
+    lines.push(
+      `**FAIL** — ${shortfalls.length} preset${shortfalls.length === 1 ? "" : "s"} below ${threshold}% across ${scope}.`,
+      "",
+      "| preset | chain | runs | uptime | failed runs |",
+      "| --- | --- | --- | --- | --- |",
+      ...shortfalls.map(
+        (row) =>
+          `| \`${row.preset}\` | ${row.chainId} | ${row.runs} | ${row.uptimePct}% | ${row.failed} |`,
+      ),
+    );
+  }
+
+  return {
+    passed: shortfalls.length === 0,
+    threshold,
+    shortfalls,
+    markdown: lines.join("\n"),
+  };
 }
 
 function stamp(iso: string | null): string {
