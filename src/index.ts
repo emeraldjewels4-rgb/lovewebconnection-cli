@@ -343,3 +343,18 @@ export type {
   WatchSummary,
   WatchTrackerState,
 } from "./watch.ts";
+
+export {
+  DEFAULT_PROBE_TIMEOUT_MS,
+  PresetsArgError,
+  formatPresets,
+  parsePresetsArgs,
+  probePresets,
+  toPresetsJson,
+} from "./presets.ts";
+
+export type {
+  PresetProbeDeps,
+  PresetProbeResult,
+  PresetsReport,
+} from "./presets.ts";

@@ -164,6 +164,13 @@ import {
   toSwapQuoteJson,
 } from "./market.ts";
 import { MarketServer } from "./market-server.ts";
+import {
+  PresetsArgError,
+  formatPresets,
+  parsePresetsArgs,
+  probePresets,
+  toPresetsJson,
+} from "./presets.ts";
 
 const argv = process.argv.slice(2);
 const command = argv[0] ?? "";
@@ -182,6 +189,7 @@ const isPlot = command === "plot";
 const isSignatures = command === "signatures";
 const isCache = command === "cache";
 const isMarket = command === "market";
+const isPresets = command === "presets";
 const isHealth = command === "" || command === "chain" || command.startsWith("-");
 
 if (
@@ -200,11 +208,12 @@ if (
   !isSignatures &&
   !isCache &&
   !isMarket &&
+  !isPresets &&
   !isPlot
 ) {
   console.error(`unknown command: ${command}`);
   console.error(
-    "usage: lwc [chain|balances|tokens|views|signatures|example|scan|compare|compare-history|watch|call|sessions|history|plot|cache|market] [--chain <name|id>] [--json]",
+    "usage: lwc [chain|presets|balances|tokens|views|signatures|example|scan|compare|compare-history|watch|call|sessions|history|plot|cache|market] [--chain <name|id>] [--json]",
   );
   process.exit(1);
 }
@@ -237,6 +246,27 @@ function stripChainFlag(args: string[]): string[] {
 const chainOverride = chainFlagValue(argv);
 const flags = stripChainFlag(isHealth ? argv : argv.slice(1));
 const asJson = flags.includes("--json");
+
+// Probes the built-in presets themselves, so it needs no configuration.
+if (isPresets) {
+  try {
+    const { timeoutMs } = parsePresetsArgs(flags);
+    const report = await probePresets({ timeoutMs });
+    console.log(
+      asJson ? JSON.stringify(toPresetsJson(report), null, 2) : formatPresets(report),
+    );
+    // Non-zero when an endpoint is unhealthy, so scripts and CI can gate on it.
+    process.exit(report.failed === 0 ? 0 : 1);
+  } catch (error) {
+    if (error instanceof PresetsArgError) {
+      console.error(`usage error: ${error.message}`);
+      console.error("  example: lwc presets --timeout 5000");
+    } else {
+      console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    process.exit(1);
+  }
+}
 
 // Local-only: listing an ABI's signatures needs no RPC configuration.
 if (isSignatures) {

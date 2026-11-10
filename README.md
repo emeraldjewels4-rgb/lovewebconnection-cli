@@ -99,6 +99,17 @@ lwc chain --chain 196        # a preset can also be named by its chain id
 LWC_CHAIN=xlayer npm run chain
 ```
 
+`lwc presets` probes all six endpoints in parallel and reports latency and head
+for each one, so a dead endpoint is visible without trying them one at a time.
+It exits non-zero if any preset is unhealthy, which makes it usable as a
+connectivity check in CI:
+
+```bash
+lwc presets
+lwc presets --json            # machine-readable; exits 1 on any failure
+lwc presets --timeout 5000    # per-endpoint budget in ms (250-120000)
+```
+
 `--chain` is global, so one shell can work across networks without editing
 `.env`:
 

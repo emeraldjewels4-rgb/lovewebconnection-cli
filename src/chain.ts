@@ -343,15 +343,25 @@ export async function probe(
 ): Promise<ChainHealth> {
   const startedAt = performance.now();
 
-  const [chainId, blockNumber, gasPriceWei, clientVersion] = await Promise.all([
+  // allSettled, not all: a dead endpoint fails several calls at once, and the
+  // rejections Promise.all discards would surface as unhandled rejections.
+  const [chainIdCall, blockCall, gasPriceCall, versionCall] = await Promise.allSettled([
     client.getChainId(),
     client.getBlockNumber(),
-    client.getGasPrice().catch(() => null),
-    client
-      .request({ method: "web3_clientVersion" })
-      .then((value) => (typeof value === "string" ? value : null))
-      .catch(() => null),
+    client.getGasPrice(),
+    client.request({ method: "web3_clientVersion" }),
   ]);
+
+  if (chainIdCall.status === "rejected") throw chainIdCall.reason;
+  if (blockCall.status === "rejected") throw blockCall.reason;
+
+  const chainId = chainIdCall.value;
+  const blockNumber = blockCall.value;
+  const gasPriceWei = gasPriceCall.status === "fulfilled" ? gasPriceCall.value : null;
+  const clientVersion =
+    versionCall.status === "fulfilled" && typeof versionCall.value === "string"
+      ? versionCall.value
+      : null;
 
   const block = await client.getBlock({ blockNumber });
   const latencyMs = Math.round(performance.now() - startedAt);
