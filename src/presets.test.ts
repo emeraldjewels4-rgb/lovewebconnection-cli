@@ -56,6 +56,12 @@ test("probes every built-in preset and reports each one healthy", async () => {
     assert.equal(endpoint.blockNumber, 42n);
     assert.equal(typeof endpoint.latencyMs, "number");
     assert.equal(endpoint.chainId, CHAIN_PRESETS[endpoint.preset]?.chainId);
+    assert.equal(endpoint.viaFallback, false, `${endpoint.preset} answered on the primary`);
+    assert.equal(endpoint.primaryError, null);
+    assert.equal(
+      endpoint.rpcHost,
+      new URL(CHAIN_PRESETS[endpoint.preset]!.rpcUrl).host,
+    );
   }
 
   const polygon = report.endpoints.find((endpoint) => endpoint.preset === "polygon");
@@ -79,7 +85,9 @@ test("one failing endpoint does not stop the others", async () => {
 
   const base = report.endpoints.find((endpoint) => endpoint.preset === "base");
   assert.equal(base?.ok, false);
-  assert.equal(base?.error, "timeout after 10000 ms");
+  assert.match(base?.error ?? "", /^both endpoints failed for base \(8453\):/);
+  assert.match(base?.error ?? "", /timeout after 10000 ms/);
+  assert.equal(base?.viaFallback, false);
   assert.equal(base?.latencyMs, null);
   assert.equal(base?.blockNumber, null);
   assert.equal(base?.chainId, 8453, "a failed probe still identifies the chain");
@@ -87,7 +95,7 @@ test("one failing endpoint does not stop the others", async () => {
   assert.ok(report.endpoints.some((endpoint) => endpoint.ok && endpoint.preset !== "base"));
 });
 
-test("a chain id mismatch is reported as one", async () => {
+test("a chain id mismatch on both endpoints is reported as one", async () => {
   const report = await probePresets({
     clientFor: (config: ChainConfig) => healthyClient(config.chainId + 1),
     presets: { base: CHAIN_PRESETS.base! },
@@ -95,14 +103,33 @@ test("a chain id mismatch is reported as one", async () => {
 
   assert.equal(report.total, 1);
   assert.equal(report.failed, 1);
-  assert.match(report.endpoints[0]?.error ?? "", /^chain mismatch:/);
+  assert.match(report.endpoints[0]?.error ?? "", /^both endpoints failed for base \(8453\):/);
   assert.match(report.endpoints[0]?.error ?? "", /answered chainId 8454/);
+});
+
+test("a dead primary is served by the preset's backup", async () => {
+  const primary = CHAIN_PRESETS.base!.rpcUrl;
+  const report = await probePresets({
+    clientFor: (config: ChainConfig) =>
+      config.rpcUrl === primary
+        ? failingClient("connect ECONNREFUSED")
+        : healthyClient(config.chainId, 99n),
+    presets: { base: CHAIN_PRESETS.base! },
+  });
+
+  const base = report.endpoints[0];
+  assert.equal(base?.ok, true, "the backup answered, so the chain is reachable");
+  assert.equal(base?.viaFallback, true);
+  assert.equal(base?.rpcHost, "base-rpc.publicnode.com");
+  assert.match(base?.primaryError ?? "", /ECONNREFUSED/);
+  assert.equal(base?.blockNumber, 99n);
+  assert.equal(report.healthy, 1);
 });
 
 test("the table names every preset and summarizes health", () => {
   const report: PresetsReport = {
-    total: 2,
-    healthy: 1,
+    total: 3,
+    healthy: 2,
     failed: 1,
     endpoints: [
       {
@@ -110,16 +137,32 @@ test("the table names every preset and summarizes health", () => {
         chainId: 8453,
         nativeSymbol: "ETH",
         rpcHost: "mainnet.base.org",
+        viaFallback: false,
+        primaryError: null,
         ok: false,
         latencyMs: null,
         blockNumber: null,
         error: "rpc unavailable",
       },
       {
+        preset: "ethereum",
+        chainId: 1,
+        nativeSymbol: "ETH",
+        rpcHost: "cloudflare-eth.com",
+        viaFallback: true,
+        primaryError: "timeout",
+        ok: true,
+        latencyMs: 90,
+        blockNumber: 26_381_504n,
+        error: null,
+      },
+      {
         preset: "xlayer",
         chainId: 196,
         nativeSymbol: "OKB",
         rpcHost: "xlayer.drpc.org",
+        viaFallback: false,
+        primaryError: null,
         ok: true,
         latencyMs: 120,
         blockNumber: 12_345_678n,
@@ -130,10 +173,12 @@ test("the table names every preset and summarizes health", () => {
 
   const text = formatPresets(report);
   assert.match(text, /^lwc — built-in presets/);
-  assert.match(text, /xlayer\s+196\s+healthy\s+120 ms\s+12345678/);
+  assert.match(text, /xlayer\s+196\s+healthy\s+120 ms\s+12345678\s+primary/);
+  assert.match(text, /ethereum\s+1\s+healthy\s+90 ms\s+26381504\s+backup/);
   assert.match(text, /base\s+8453\s+failed/);
   assert.match(text, /base: rpc unavailable/);
-  assert.match(text, /1 of 2 endpoints healthy/);
+  assert.match(text, /ethereum: primary failed \(timeout\); answered by cloudflare-eth\.com/);
+  assert.match(text, /2 of 3 endpoints healthy/);
 });
 
 test("JSON keeps bigints as strings and failures as nulls", () => {
@@ -147,6 +192,8 @@ test("JSON keeps bigints as strings and failures as nulls", () => {
         chainId: 196,
         nativeSymbol: "OKB",
         rpcHost: "xlayer.drpc.org",
+        viaFallback: false,
+        primaryError: null,
         ok: true,
         latencyMs: 5,
         blockNumber: 12_345_678n,
@@ -157,6 +204,8 @@ test("JSON keeps bigints as strings and failures as nulls", () => {
         chainId: 8453,
         nativeSymbol: "ETH",
         rpcHost: "mainnet.base.org",
+        viaFallback: false,
+        primaryError: null,
         ok: false,
         latencyMs: null,
         blockNumber: null,
@@ -166,6 +215,7 @@ test("JSON keeps bigints as strings and failures as nulls", () => {
   });
 
   assert.equal(json.endpoints[0]?.blockNumber, "12345678");
+  assert.equal(json.endpoints[0]?.viaFallback, false);
   assert.equal(json.endpoints[1]?.blockNumber, null);
   assert.equal(json.endpoints[1]?.error, "boom");
   assert.equal(json.healthy, 1);

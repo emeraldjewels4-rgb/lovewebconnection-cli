@@ -78,19 +78,27 @@ lwc — chain connection
 `npm run chain:json` emits `chain`, `rpc`, `health`, and `warnings` with bigints
 as decimal strings, so the output is safe for `jq` and logs. The auth header is
 never printed, and `chain.preset` names the built-in chain in use (or `null`).
+`rpc.host` is the endpoint that answered, while `rpc.usedFallback`,
+`rpc.primaryHost`, and `rpc.primaryError` record a failover to the backup.
 
 ## Chains
 
 Six chains are built in, so checking them needs no configuration:
 
-| Preset | Chain id | Native | Default RPC |
-| --- | --- | --- | --- |
-| `xlayer` | 196 | OKB | `https://xlayer.drpc.org` |
-| `base` | 8453 | ETH | `https://mainnet.base.org` |
-| `ethereum` | 1 | ETH | `https://ethereum-rpc.publicnode.com` |
-| `arbitrum` | 42161 | ETH | `https://arb1.arbitrum.io/rpc` |
-| `optimism` | 10 | ETH | `https://mainnet.optimism.io` |
-| `polygon` | 137 | POL | `https://polygon-bor-rpc.publicnode.com` |
+| Preset | Chain id | Native | Default RPC | Backup RPC |
+| --- | --- | --- | --- | --- |
+| `xlayer` | 196 | OKB | `https://xlayer.drpc.org` | `https://rpc.xlayer.tech` |
+| `base` | 8453 | ETH | `https://mainnet.base.org` | `https://base-rpc.publicnode.com` |
+| `ethereum` | 1 | ETH | `https://ethereum-rpc.publicnode.com` | `https://cloudflare-eth.com` |
+| `arbitrum` | 42161 | ETH | `https://arb1.arbitrum.io/rpc` | `https://arbitrum-one-rpc.publicnode.com` |
+| `optimism` | 10 | ETH | `https://mainnet.optimism.io` | `https://optimism-rpc.publicnode.com` |
+| `polygon` | 137 | POL | `https://polygon-bor-rpc.publicnode.com` | `https://polygon.drpc.org` |
+
+Every preset has a backup endpoint from a different operator. When the default
+endpoint is unreachable, times out, or answers with the wrong chain id, `lwc
+chain` and `lwc presets` retry against the backup and report which one answered
+instead of failing outright. A configured `LWC_RPC_AUTH` disables the failover:
+a credential is only ever sent to the operator it was issued for.
 
 ```bash
 lwc chain --chain xlayer

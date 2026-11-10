@@ -16,12 +16,16 @@ export interface ChainConfig {
   timeoutMs: number;
   /** Name of the built-in preset this config came from, or null for a custom chain. */
   preset: string | null;
+  /** Endpoint to try when rpcUrl cannot answer, or null when there is none. */
+  fallbackRpcUrl?: string | null;
 }
 
 export interface ChainPreset {
   chainId: number;
   name: string;
   rpcUrl: string;
+  /** Second public endpoint from a different operator, used when rpcUrl is down. */
+  fallbackRpcUrl: string;
   nativeSymbol: string;
 }
 
@@ -35,30 +39,36 @@ export const CHAIN_PRESETS: Record<string, ChainPreset> = {
     chainId: 196,
     name: "xlayer",
     rpcUrl: "https://xlayer.drpc.org",
+    // OKX's own endpoint, a different operator from the primary.
+    fallbackRpcUrl: "https://rpc.xlayer.tech",
     nativeSymbol: "OKB",
   },
   base: {
     chainId: 8453,
     name: "base",
     rpcUrl: "https://mainnet.base.org",
+    fallbackRpcUrl: "https://base-rpc.publicnode.com",
     nativeSymbol: "ETH",
   },
   ethereum: {
     chainId: 1,
     name: "ethereum",
     rpcUrl: "https://ethereum-rpc.publicnode.com",
+    fallbackRpcUrl: "https://cloudflare-eth.com",
     nativeSymbol: "ETH",
   },
   arbitrum: {
     chainId: 42_161,
     name: "arbitrum",
     rpcUrl: "https://arb1.arbitrum.io/rpc",
+    fallbackRpcUrl: "https://arbitrum-one-rpc.publicnode.com",
     nativeSymbol: "ETH",
   },
   optimism: {
     chainId: 10,
     name: "optimism",
     rpcUrl: "https://mainnet.optimism.io",
+    fallbackRpcUrl: "https://optimism-rpc.publicnode.com",
     nativeSymbol: "ETH",
   },
   polygon: {
@@ -66,6 +76,7 @@ export const CHAIN_PRESETS: Record<string, ChainPreset> = {
     name: "polygon",
     // polygon-rpc.com answers 401 now; this endpoint was probed live.
     rpcUrl: "https://polygon-bor-rpc.publicnode.com",
+    fallbackRpcUrl: "https://polygon.drpc.org",
     // POL since the chain renamed its token from MATIC.
     nativeSymbol: "POL",
   },
@@ -251,10 +262,17 @@ export function parseChainConfig(
     preset?.nativeSymbol ||
     "ETH";
 
+  // The backup comes from the preset, so it never points at the endpoint the
+  // user configured (or at whatever the preset's primary already is).
+  const presetFallback = preset?.fallbackRpcUrl ?? null;
+  const fallbackRpcUrl =
+    presetFallback !== null && presetFallback !== rpcUrl ? presetFallback : null;
+
   return {
     chainId,
     name,
     rpcUrl,
+    fallbackRpcUrl,
     nativeCurrency: { name: symbol, symbol, decimals: 18 },
     authHeader,
     timeoutMs,
@@ -385,6 +403,66 @@ export async function probe(
   };
 }
 
+export interface ProbeOutcome {
+  health: ChainHealth;
+  /** The endpoint that answered: the backup when the primary was unhealthy. */
+  config: ChainConfig;
+  usedFallback: boolean;
+  /** Redacted primary endpoint, set only when the backup answered. */
+  primaryEndpoint: string | null;
+  /** Why the primary was skipped, set only when the backup answered. */
+  primaryError: string | null;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Probe the configured endpoint, falling back to the preset's second endpoint
+ * when the first cannot be used: unreachable, timing out, or answering with the
+ * wrong chain id. A configured auth header pins the probe to the primary, since
+ * sending someone's credentials to another operator would be a leak.
+ */
+export async function probeWithFallback(
+  clientFor: (config: ChainConfig) => PublicClient,
+  config: ChainConfig,
+): Promise<ProbeOutcome> {
+  try {
+    const health = await probe(clientFor(config), config);
+    return {
+      health,
+      config,
+      usedFallback: false,
+      primaryEndpoint: null,
+      primaryError: null,
+    };
+  } catch (error) {
+    const fallback = config.fallbackRpcUrl?.trim() || null;
+    if (fallback === null || fallback === config.rpcUrl || config.authHeader !== null) {
+      throw error;
+    }
+
+    const backupConfig: ChainConfig = { ...config, rpcUrl: fallback, fallbackRpcUrl: null };
+    try {
+      const health = await probe(clientFor(backupConfig), backupConfig);
+      return {
+        health,
+        config: backupConfig,
+        usedFallback: true,
+        primaryEndpoint: publicEndpoint(config.rpcUrl),
+        primaryError: describeError(error),
+      };
+    } catch (fallbackError) {
+      throw new ChainConfigError(
+        `both endpoints failed for ${config.name} (${config.chainId}): ` +
+          `${publicEndpoint(config.rpcUrl)} — ${describeError(error)}; ` +
+          `${publicEndpoint(fallback)} — ${describeError(fallbackError)}`,
+      );
+    }
+  }
+}
+
 function formatAge(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
@@ -425,6 +503,7 @@ export function toJsonPayload(
   health: ChainHealth,
   config: ChainConfig,
   warnings: string[],
+  outcome?: Pick<ProbeOutcome, "usedFallback" | "primaryEndpoint" | "primaryError">,
 ): Record<string, unknown> {
   return {
     ok: true,
@@ -437,6 +516,12 @@ export function toJsonPayload(
     rpc: {
       host: new URL(config.rpcUrl).host,
       auth: config.authHeader ? "configured" : "none",
+      fallbackHost: config.fallbackRpcUrl
+        ? new URL(config.fallbackRpcUrl).host
+        : null,
+      usedFallback: outcome?.usedFallback ?? false,
+      primaryHost: outcome?.primaryEndpoint ?? null,
+      primaryError: outcome?.primaryError ?? null,
     },
     health: {
       ...health,

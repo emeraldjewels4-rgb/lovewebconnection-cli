@@ -4,7 +4,7 @@ import {
   CHAIN_PRESETS,
   ChainMismatchError,
   buildClient,
-  probe,
+  probeWithFallback,
   type ChainConfig,
   type ChainPreset,
 } from "./chain.ts";
@@ -24,7 +24,12 @@ export interface PresetProbeResult {
   preset: string;
   chainId: number;
   nativeSymbol: string;
+  /** Host that answered: the backup endpoint when the primary could not. */
   rpcHost: string;
+  /** True when the primary failed and the backup answered instead. */
+  viaFallback: boolean;
+  /** Why the primary was skipped, when viaFallback is true. */
+  primaryError: string | null;
   ok: boolean;
   latencyMs: number | null;
   blockNumber: bigint | null;
@@ -78,6 +83,7 @@ export async function probePresets(deps: PresetProbeDeps = {}): Promise<PresetsR
         chainId: preset.chainId,
         name: preset.name,
         rpcUrl: preset.rpcUrl,
+        fallbackRpcUrl: preset.fallbackRpcUrl,
         nativeCurrency: {
           name: preset.nativeSymbol,
           symbol: preset.nativeSymbol,
@@ -91,21 +97,28 @@ export async function probePresets(deps: PresetProbeDeps = {}): Promise<PresetsR
         preset: name,
         chainId: preset.chainId,
         nativeSymbol: preset.nativeSymbol,
-        rpcHost: hostOf(preset.rpcUrl),
       };
 
       try {
-        const health = await probe(clientFor(config), config);
+        // The backup endpoint is part of the preset, so a dead primary still
+        // reports the chain as reachable and says which endpoint answered.
+        const outcome = await probeWithFallback(clientFor, config);
         return {
           ...base,
+          rpcHost: outcome.health.rpcHost,
+          viaFallback: outcome.usedFallback,
+          primaryError: outcome.primaryError,
           ok: true,
-          latencyMs: health.latencyMs,
-          blockNumber: health.blockNumber,
+          latencyMs: outcome.health.latencyMs,
+          blockNumber: outcome.health.blockNumber,
           error: null,
         };
       } catch (error) {
         return {
           ...base,
+          rpcHost: hostOf(preset.rpcUrl),
+          viaFallback: false,
+          primaryError: null,
           ok: false,
           latencyMs: null,
           blockNumber: null,
@@ -131,8 +144,9 @@ export function formatPresets(report: PresetsReport): string {
     endpoint.ok ? "healthy" : "failed",
     endpoint.ok && endpoint.latencyMs !== null ? `${endpoint.latencyMs} ms` : "—",
     endpoint.ok && endpoint.blockNumber !== null ? String(endpoint.blockNumber) : "—",
+    endpoint.ok ? (endpoint.viaFallback ? "backup" : "primary") : "—",
   ]);
-  const headers = ["preset", "chain", "status", "latency", "block"];
+  const headers = ["preset", "chain", "status", "latency", "block", "via"];
   const widths = headers.map((header, column) =>
     Math.max(header.length, ...rows.map((row) => row[column]!.length)),
   );
@@ -141,8 +155,14 @@ export function formatPresets(report: PresetsReport): string {
 
   const lines = ["lwc — built-in presets", "", line(headers), ...rows.map(line)];
 
-  for (const failure of report.endpoints.filter((endpoint) => !endpoint.ok)) {
-    lines.push(`  ${failure.preset}: ${failure.error ?? "unknown error"}`);
+  for (const endpoint of report.endpoints) {
+    if (!endpoint.ok) {
+      lines.push(`  ${endpoint.preset}: ${endpoint.error ?? "unknown error"}`);
+    } else if (endpoint.viaFallback) {
+      lines.push(
+        `  ${endpoint.preset}: primary failed (${endpoint.primaryError ?? "unknown error"}); answered by ${endpoint.rpcHost}`,
+      );
+    }
   }
 
   lines.push("", `${report.healthy} of ${report.total} endpoints healthy`);

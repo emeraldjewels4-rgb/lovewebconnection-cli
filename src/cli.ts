@@ -29,7 +29,7 @@ import {
   connectionWarnings,
   formatHealth,
   parseChainConfig,
-  probe,
+  probeWithFallback,
   publicEndpoint,
   toJsonPayload,
 } from "./chain.ts";
@@ -1085,12 +1085,24 @@ try {
       process.exitCode = 1;
     }
   } else {
-    const warnings = connectionWarnings(config);
-    const health = await probe(client, config);
+    // A preset's backup answers when the configured endpoint cannot, and the
+    // report names whichever endpoint actually answered.
+    const outcome = await probeWithFallback(buildClient, config);
+    const answered = outcome.config;
+    const warnings = connectionWarnings(answered);
+    if (outcome.usedFallback) {
+      warnings.push(
+        `primary ${outcome.primaryEndpoint} failed (${outcome.primaryError}); answered by ${new URL(answered.rpcUrl).host}`,
+      );
+    }
     console.log(
       asJson
-        ? JSON.stringify(toJsonPayload(health, config, warnings), null, 2)
-        : formatHealth(health, config, warnings),
+        ? JSON.stringify(
+            toJsonPayload(outcome.health, answered, warnings, outcome),
+            null,
+            2,
+          )
+        : formatHealth(outcome.health, answered, warnings),
     );
   }
 } catch (error) {

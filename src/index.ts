@@ -204,12 +204,13 @@ export {
   formatHealth,
   parseChainConfig,
   probe,
+  probeWithFallback,
   publicEndpoint,
   resolveChainPreset,
   toJsonPayload,
 } from "./chain.ts";
 
-export type { ChainConfig, ChainHealth, ChainPreset } from "./chain.ts";
+export type { ChainConfig, ChainHealth, ChainPreset, ProbeOutcome } from "./chain.ts";
 
 export {
   ContractCallError,
