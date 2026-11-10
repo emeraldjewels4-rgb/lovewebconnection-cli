@@ -43,7 +43,10 @@ the `xlayer` preset, so a fresh copy works without editing anything.
 
 `npm install` also installs the pre-commit hook: its `prepare` script points
 `core.hooksPath` at `.githooks`, so every commit runs `npm run typecheck` and
-`npm test` first. Expect it to add 15–25 seconds to a commit.
+`npm test` first. Expect it to add 15–25 seconds to a commit. The hook also
+runs the preset gate described below under **Presets**: it blocks a commit when
+the recorded history fails its uptime gate, and skips until a history file
+exists.
 
 Skip it when you need to:
 
@@ -197,6 +200,25 @@ the report is the output. `--json` emits the same fields as one document, which
 is what a pre-commit hook or a local dashboard reads: `gate` carries the
 threshold, verdict and shortfalls, `coverage` the file's span and recorded runs,
 and `retention` its declared span and cutoff.
+
+The same exit code is what a pre-commit hook blocks on, and
+`scripts/pre-commit-presets.mjs` wraps the check for git: silent when the gate
+passes, the report on stderr when it fails, a clean skip when the history file
+does not exist yet (`--strict-missing` makes that a failure instead), and a
+refusal to merge rather than gate a file other than the one it names. Exit
+codes are 0 for a pass or skip, 1 for a failed gate and 2 for a misconfigured
+hook; `--json` writes one document to stdout in every outcome, with the
+explanation kept on stderr so stdout stays parseable. The path and threshold
+can come from `LWC_PRESETS_HISTORY` and `LWC_FAIL_UNDER`, which is how the
+repository hook runs it:
+
+```sh
+node scripts/pre-commit-presets.mjs --since 7d --fail-under 95
+```
+
+That is the line `.githooks/pre-commit` adds after the typecheck and tests, so
+recording runs is enough to start blocking commits on a failing gate — no
+further configuration, and no gate until the first run is recorded.
 
 `--merge <file>` (repeatable) folds other history files into the one positional
 file before anything reads it, and `--out <path>` writes the combined JSONL — so

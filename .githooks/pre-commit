@@ -16,3 +16,7 @@ npm run typecheck
 
 echo "pre-commit: tests"
 npm test
+
+# Inert until a preset history is recorded; skips when the file does not exist.
+echo "pre-commit: preset gate"
+node scripts/pre-commit-presets.mjs --since 7d --fail-under "${LWC_FAIL_UNDER:-95}"
