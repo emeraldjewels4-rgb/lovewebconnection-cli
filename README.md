@@ -132,6 +132,7 @@ lwc presets-history .lwc-history/presets.jsonl --since 7d --timeline ./timeline.
 lwc presets-history .lwc-history/presets.jsonl --since 7d --compare 14d..7d
 lwc presets-history .lwc-history/presets.jsonl --since 30d --compare 60d..30d
 lwc presets-history .lwc-history/presets.jsonl --since 7d --fail-under 99
+lwc presets-history .lwc-history/presets.jsonl --since 7d --check --fail-under 99
 lwc presets-history mine.jsonl --merge laptop.jsonl --out combined.jsonl --retain 180d
 ```
 
@@ -185,6 +186,17 @@ while the table still goes to stdout. Because it judges the window, pair it with
 history — a provider that failed two of the last twenty runs is caught even when
 the newest run was healthy. An empty window fails the gate, since there is no
 run to clear it.
+
+`--check` bundles that gate with the file's own facts for a local run: one
+command prints the coverage, the declared retention, the window it judged, any
+retention note, and the PASS/FAIL verdict with the presets below the threshold,
+then exits on the verdict — no CI job, run summary or annotation needed. It
+requires `--fail-under` (the check is the gate, so the threshold is not
+guessed) and cannot be combined with `--csv`, `--timeline` or `--compare`, since
+the report is the output. `--json` emits the same fields as one document, which
+is what a pre-commit hook or a local dashboard reads: `gate` carries the
+threshold, verdict and shortfalls, `coverage` the file's span and recorded runs,
+and `retention` its declared span and cutoff.
 
 `--merge <file>` (repeatable) folds other history files into the one positional
 file before anything reads it, and `--out <path>` writes the combined JSONL — so

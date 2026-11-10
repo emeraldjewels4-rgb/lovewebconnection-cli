@@ -9,12 +9,14 @@ import {
   appendPresetHistory,
   comparePresetHistory,
   formatPresetHistory,
+  formatPresetHistoryCheck,
   formatPresetHistoryComparison,
   mergePresetHistory,
   narrowestRetentionMs,
   readPresetHistoryFile,
   retentionWindowWarnings,
   parsePresetHistoryArgs,
+  presetHistoryCheck,
   presetHistoryCsv,
   presetComparisonMarkdown,
   presetHistoryTimelineCsv,
@@ -247,6 +249,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     merge: [],
     out: null,
     retain: null,
+    check: false,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--json"]), {
     path: "history.jsonl",
@@ -260,6 +263,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     merge: [],
     out: null,
     retain: null,
+    check: false,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--csv", "-"]), {
     path: "history.jsonl",
@@ -273,6 +277,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     merge: [],
     out: null,
     retain: null,
+    check: false,
   });
   assert.equal(parsePresetHistoryArgs(["h.jsonl", "--timeline", "-"]).timelinePath, "-");
 
@@ -564,6 +569,7 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
     merge: [],
     out: null,
     retain: null,
+    check: false,
   });
 
   for (const argv of [
@@ -601,6 +607,7 @@ test("parses --until as a closed end, and rejects an inverted window", () => {
     merge: [],
     out: null,
     retain: null,
+    check: false,
   });
 
   for (const argv of [
@@ -783,6 +790,112 @@ test("the gate cannot pass an empty window", () => {
   assert.match(
     gate.markdown,
     /no runs in the window \(1 recorded\), so a 80% minimum cannot be verified/,
+  );
+});
+
+test("--check reports coverage, retention and the gate in one pass", () => {
+  const summary = summarizePresetHistory(
+    [
+      record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+      record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453), endpoint("xlayer", 196)]),
+    ],
+    { since: Date.parse("2026-11-08T00:00:00Z") },
+    { retainMs: 3 * 86_400_000 },
+  );
+  const check = presetHistoryCheck("presets.jsonl", summary, 95);
+  const text = formatPresetHistoryCheck(check);
+
+  assert.equal(check.gate.passed, true);
+  assert.deepEqual(check.coverage, {
+    from: "2026-11-08T06:17:00.000Z",
+    to: "2026-11-09T06:17:00.000Z",
+    recorded: 2,
+  });
+  assert.deepEqual(check.retention, {
+    ms: 259_200_000,
+    label: "3 days",
+    cutoff: "2026-11-06T06:17:00.000Z",
+  });
+  assert.equal(check.note, null);
+  assert.match(text, /file\s+presets\.jsonl/);
+  assert.match(text, /runs\s+2 runs/);
+  assert.match(text, /covers\s+2026-11-08 06:17 → 2026-11-09 06:17 \(2 recorded\)/);
+  assert.match(text, /retained\s+3 days \(nothing older than 2026-11-06 06:17\)/);
+  assert.match(text, /gate\s+PASS — all 2 presets stayed at or above 95% across 2 runs\./);
+});
+
+test("--check names the shortfall and a window older than the retained history", () => {
+  const down = { ok: false, latencyMs: null, blockNumber: null, error: "down" };
+  const summary = summarizePresetHistory(
+    [
+      record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1, down)]),
+      record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1, down)]),
+    ],
+    { since: Date.parse("2026-10-01T00:00:00Z") },
+    { retainMs: 86_400_000 },
+  );
+  const check = presetHistoryCheck("presets.jsonl", summary, 100);
+  const text = formatPresetHistoryCheck(check);
+
+  assert.equal(check.gate.passed, false);
+  assert.deepEqual(
+    check.gate.shortfalls.map((row) => [row.preset, row.uptimePct]),
+    [["ethereum", 0]],
+  );
+  assert.match(
+    check.note ?? "",
+    /^the window starts 2026-10-01 00:00, before the retained history \(2026-11-08 06:17\)/,
+  );
+  assert.match(text, /gate\s+FAIL — 1 preset below 100% across 2 runs\./);
+  assert.match(text, /ethereum\s+1\s+2\s+0%\s+2/);
+});
+
+test("--check fails an empty window and omits a retention it has none of", () => {
+  const summary = summarizePresetHistory(
+    [record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)])],
+    { since: Date.parse("2026-11-09T00:00:00Z") },
+  );
+  const check = presetHistoryCheck("presets.jsonl", summary, 80);
+  const text = formatPresetHistoryCheck(check);
+
+  assert.equal(check.gate.passed, false);
+  assert.equal(check.retention, null);
+  assert.equal(check.note, null);
+  assert.match(
+    text,
+    /gate\s+FAIL — no runs in the window \(1 recorded\), so 80% cannot be verified\./,
+  );
+  assert.doesNotMatch(text, /retained/);
+});
+
+test("--check needs a threshold and takes no export or comparison", () => {
+  const args = parsePresetHistoryArgs([
+    "h.jsonl",
+    "--since",
+    "7d",
+    "--check",
+    "--fail-under",
+    "99",
+  ]);
+  assert.equal(args.check, true);
+  assert.equal(args.failUnder, 99);
+  assert.equal(parsePresetHistoryArgs(["h.jsonl"]).check, false);
+
+  assert.throws(
+    () => parsePresetHistoryArgs(["h.jsonl", "--check"]),
+    /--check reports a gate, so pass --fail-under/,
+  );
+  assert.throws(
+    () => parsePresetHistoryArgs(["h.jsonl", "--check", "--fail-under", "90", "--csv", "-"]),
+    /--check cannot be combined with --csv or --timeline/,
+  );
+  assert.throws(
+    () =>
+      parsePresetHistoryArgs(
+        ["h.jsonl", "--check", "--fail-under", "90", "--since", "7d", "--compare", "14d..7d"],
+        Date.parse("2026-11-10T12:00:00Z"),
+      ),
+    /--check reports one window/,
   );
 });
 

@@ -176,9 +176,11 @@ import {
   appendPresetHistory,
   comparePresetHistory,
   formatPresetHistory,
+  formatPresetHistoryCheck,
   formatPresetHistoryComparison,
   mergePresetHistory,
   parsePresetHistoryArgs,
+  presetHistoryCheck,
   presetHistoryCsv,
   presetHistoryTimelineCsv,
   presetsBelowUptime,
@@ -375,6 +377,22 @@ if (isPresetHistory) {
       { since: args.since, until: args.until, limit: args.limit },
       { retainMs: readRetain },
     );
+    // --check is the local gate: coverage, retention and the verdict in one
+    // pass, so a machine without a CI job still gets the whole answer.
+    if (args.check) {
+      const threshold = args.failUnder;
+      if (threshold === null) {
+        throw new PresetsHistoryArgError(
+          "--check reports a gate, so pass --fail-under <pct> with it.",
+        );
+      }
+      const check = presetHistoryCheck(historyPath, summary, threshold);
+      console.log(
+        asJson ? JSON.stringify(check, null, 2) : formatPresetHistoryCheck(check),
+      );
+      process.exit(check.gate.passed ? 0 : 1);
+    }
+
     const comparison =
       args.compare === null
         ? null

@@ -720,6 +720,138 @@ export function formatPresetHistory(summary: PresetsHistorySummary): string {
   return lines.join("\n");
 }
 
+/** One local pass over a history file: the gate plus what the file can cover. */
+export interface PresetsHistoryCheck {
+  /** The history file the report was made from. */
+  path: string;
+  /** Runs the gate judged. */
+  runs: number;
+  /** Presets judged in the window. */
+  presets: number;
+  /** The whole file's span and recorded count, before the window was applied. */
+  coverage: { from: string | null; to: string | null; recorded: number };
+  /** The retention the file declares, or null when it declares none. */
+  retention: { ms: number; label: string; cutoff: string } | null;
+  /** The filters the gate window applied. */
+  window: { since: number | null; until: number | null; limit: number | null };
+  gate: { threshold: number; passed: boolean; shortfalls: UptimeShortfall[] };
+  /** Why the window may be missing runs retention pruned, or null. */
+  note: string | null;
+}
+
+/**
+ * Build the local check: the gate over the selected window plus the file's
+ * coverage and declared retention, so one command answers "did it pass, and
+ * what was it able to see?" without a CI run to assemble the pieces.
+ */
+export function presetHistoryCheck(
+  path: string,
+  summary: PresetsHistorySummary,
+  threshold: number,
+): PresetsHistoryCheck {
+  const gate = summarizePresetGate(summary, threshold);
+  const cutoff = retainedCutoff(summary);
+
+  return {
+    path,
+    runs: summary.runs,
+    presets: summary.presets.length,
+    coverage: {
+      from: summary.availableFrom,
+      to: summary.availableTo,
+      recorded: summary.totalRuns,
+    },
+    retention:
+      summary.retainMs === null || cutoff === null
+        ? null
+        : {
+            ms: summary.retainMs,
+            label: formatRetention(summary.retainMs),
+            cutoff: new Date(cutoff).toISOString(),
+          },
+    window: { since: summary.since, until: summary.until, limit: summary.limit },
+    gate: { threshold, passed: gate.passed, shortfalls: gate.shortfalls },
+    note:
+      cutoff !== null && summary.since !== null && summary.since < cutoff
+        ? `the window starts ${stamp(new Date(summary.since).toISOString())}, before the retained history (${stamp(new Date(cutoff).toISOString())}); missing runs may have been pruned, not failed.`
+        : null,
+  };
+}
+
+/** Render the local check as one aligned pass, ending in the verdict. */
+export function formatPresetHistoryCheck(check: PresetsHistoryCheck): string {
+  const field = (label: string, value: string): string => `  ${label.padEnd(9)}${value}`;
+  const { coverage, retention, gate, window: applied } = check;
+  const runs =
+    check.runs === 0
+      ? `no runs (${coverage.recorded} recorded)`
+      : `${check.runs} run${check.runs === 1 ? "" : "s"}`;
+  const lines = ["lwc — preset health check", "", field("file", check.path), field("runs", runs)];
+
+  if (coverage.from !== null && coverage.to !== null) {
+    lines.push(
+      field(
+        "covers",
+        `${stamp(coverage.from)} → ${stamp(coverage.to)} (${coverage.recorded} recorded)`,
+      ),
+    );
+  }
+  const filters = [
+    applied.since === null ? null : `since ${stamp(new Date(applied.since).toISOString())}`,
+    applied.until === null ? null : `until ${stamp(new Date(applied.until).toISOString())}`,
+    applied.limit === null ? null : `newest ${applied.limit}`,
+  ].filter((part): part is string => part !== null);
+  if (filters.length > 0) lines.push(field("window", filters.join(", ")));
+  if (retention !== null) {
+    lines.push(
+      field("retained", `${retention.label} (nothing older than ${stamp(retention.cutoff)})`),
+    );
+  }
+  if (check.note !== null) lines.push(field("note", check.note));
+
+  if (check.runs === 0) {
+    lines.push(
+      field(
+        "gate",
+        `FAIL — no runs in the window (${coverage.recorded} recorded), so ${gate.threshold}% cannot be verified.`,
+      ),
+    );
+    return lines.join("\n");
+  }
+  if (gate.passed) {
+    const presets = `${check.presets} preset${check.presets === 1 ? "" : "s"}`;
+    lines.push(
+      field("gate", `PASS — all ${presets} stayed at or above ${gate.threshold}% across ${runs}.`),
+    );
+    return lines.join("\n");
+  }
+
+  const below = gate.shortfalls.length;
+  lines.push(
+    field(
+      "gate",
+      `FAIL — ${below} preset${below === 1 ? "" : "s"} below ${gate.threshold}% across ${runs}.`,
+    ),
+    "",
+  );
+  const rows = gate.shortfalls.map((row) => [
+    row.preset,
+    String(row.chainId),
+    String(row.runs),
+    `${row.uptimePct}%`,
+    String(row.failed),
+  ]);
+  const headers = ["preset", "chain", "runs", "uptime", "failed"];
+  const widths = headers.map((header, column) =>
+    Math.max(header.length, ...rows.map((row) => row[column]!.length)),
+  );
+  const table = (cells: string[]): string =>
+    `  ${cells.map((cell, column) => cell.padEnd(widths[column]!)).join("  ").trimEnd()}`;
+
+  lines.push(table(headers), ...rows.map(table));
+  return lines.join("\n");
+}
+
 /**
  * Judge a provider change by reading the same presets in two windows: the
  * current one from the usual filters, and an explicit earlier one. Both sides
@@ -1119,6 +1251,8 @@ export interface PresetsHistoryArgs {
   out: string | null;
   /** Epoch-ms retention window for the merge from --retain, or null to keep everything. */
   retain: number | null;
+  /** Report the file's coverage and retention beside the gate in one local pass. */
+  check: boolean;
 }
 
 const SINCE_UNITS_MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
@@ -1159,6 +1293,7 @@ export function parsePresetHistoryArgs(
   const merge: string[] = [];
   let out: string | null = null;
   let retain: number | null = null;
+  let check = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
@@ -1170,6 +1305,10 @@ export function parsePresetHistoryArgs(
     };
 
     if (arg === "--json") continue;
+    if (arg === "--check") {
+      check = true;
+      continue;
+    }
     if (arg === "--since" || arg.startsWith("--since=")) {
       const value = arg.startsWith("--since=")
         ? arg.slice("--since=".length)
@@ -1288,6 +1427,21 @@ export function parsePresetHistoryArgs(
       "--retain bounds the combined history, so pass at least one --merge <file>.",
     );
   }
+  if (check) {
+    // The check report is the output, so an export has nowhere to go, and a
+    // comparison is a different report rather than part of this one.
+    if (failUnder === null) {
+      throw new PresetsHistoryArgError(
+        "--check reports a gate, so pass --fail-under <pct> with it.",
+      );
+    }
+    if (csvPath !== null || timelinePath !== null) {
+      throw new PresetsHistoryArgError("--check cannot be combined with --csv or --timeline.");
+    }
+    if (compare !== null) {
+      throw new PresetsHistoryArgError("--check reports one window; use --compare without it.");
+    }
+  }
   if (compare !== null) {
     if (csvPath !== null || timelinePath !== null) {
       throw new PresetsHistoryArgError("--compare cannot be combined with --csv or --timeline.");
@@ -1306,7 +1460,20 @@ export function parsePresetHistoryArgs(
       throw new PresetsHistoryArgError("--compare must end at or before --since.");
     }
   }
-  return { path, since, until, limit, failUnder, csvPath, timelinePath, compare, merge, out, retain };
+  return {
+    path,
+    since,
+    until,
+    limit,
+    failUnder,
+    csvPath,
+    timelinePath,
+    compare,
+    merge,
+    out,
+    retain,
+    check,
+  };
 }
 
 /** A retention window as a positive span (`180d`), for --retain and the CI merge. */

@@ -369,10 +369,12 @@ export {
   appendPresetHistory,
   comparePresetHistory,
   formatPresetHistory,
+  formatPresetHistoryCheck,
   formatPresetHistoryComparison,
   mergePresetHistory,
   parsePresetHistoryArgs,
   parseRetentionMs,
+  presetHistoryCheck,
   presetHistoryCsv,
   presetHistoryTimelineCsv,
   presetRegressionWarnings,
@@ -390,6 +392,8 @@ export {
   summarizeProviderHistory,
   toPresetHistoryJson,
 } from "./presets-history.ts";
+
+export type { PresetsHistoryCheck } from "./presets-history.ts";
 
 export type {
   PresetHistoryMerge,
