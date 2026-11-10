@@ -30,6 +30,12 @@ export interface PresetsHistorySelection {
   limit?: number | null;
 }
 
+/** What the file the runs came from says about itself. */
+export interface PresetsHistoryContext {
+  /** Retention declared by the file's header, or null when it declares none. */
+  retainMs?: number | null;
+}
+
 export interface PresetHistoryRow {
   preset: string;
   chainId: number;
@@ -62,6 +68,12 @@ export interface PresetsHistorySummary {
   healthyRuns: number;
   failedRuns: number;
   failoverRuns: number;
+  /** Oldest run in the file, before the window was applied. */
+  availableFrom: string | null;
+  /** Newest run in the file, before the window was applied. */
+  availableTo: string | null;
+  /** Retention the source file declares, or null when it declares none. */
+  retainMs: number | null;
   presets: PresetHistoryRow[];
 }
 
@@ -402,8 +414,16 @@ export function summarizeProviderHistory(
 export function summarizePresetHistory(
   records: PresetHistoryRecord[],
   selection: PresetsHistorySelection = {},
+  context: PresetsHistoryContext = {},
 ): PresetsHistorySummary {
   const totalRuns = records.length;
+  let oldest = Number.POSITIVE_INFINITY;
+  let newest = Number.NEGATIVE_INFINITY;
+  for (const record of records) {
+    const at = Date.parse(record.at);
+    if (at < oldest) oldest = at;
+    if (at > newest) newest = at;
+  }
   const since = selection.since ?? null;
   const until = selection.until ?? null;
   const limit = selection.limit ?? null;
@@ -486,6 +506,9 @@ export function summarizePresetHistory(
     totalRuns,
     from: ordered[0]?.at ?? null,
     to: ordered.at(-1)?.at ?? null,
+    availableFrom: totalRuns === 0 ? null : new Date(oldest).toISOString(),
+    availableTo: totalRuns === 0 ? null : new Date(newest).toISOString(),
+    retainMs: context.retainMs ?? null,
     since,
     until,
     limit,
@@ -586,6 +609,23 @@ function stamp(iso: string | null): string {
   return iso === null ? "—" : iso.slice(0, 16).replace("T", " ");
 }
 
+/** A retention span in the largest unit it divides exactly, so `180d` reads. */
+function formatRetention(ms: number): string {
+  const units: Array<[number, string]> = [
+    [86_400_000, "day"],
+    [3_600_000, "hour"],
+    [60_000, "minute"],
+    [1000, "second"],
+  ];
+  for (const [size, name] of units) {
+    if (ms % size === 0) {
+      const count = ms / size;
+      return `${count} ${name}${count === 1 ? "" : "s"}`;
+    }
+  }
+  return `${ms} ms`;
+}
+
 export function formatPresetHistory(summary: PresetsHistorySummary): string {
   if (summary.runs === 0) {
     if (summary.totalRuns > 0) {
@@ -608,11 +648,28 @@ export function formatPresetHistory(summary: PresetsHistorySummary): string {
     summary.limit === null ? null : `last ${summary.limit} runs`,
   ].filter((part): part is string => part !== null);
 
+  // The file's own coverage and the retention it declares, so a windowed or
+  // trimmed view says what was left out instead of looking like the whole record.
+  const coverage =
+    summary.availableFrom === null || summary.availableTo === null
+      ? null
+      : `${stamp(summary.availableFrom)} → ${stamp(summary.availableTo)}`;
+  const retained =
+    summary.retainMs === null || summary.availableTo === null
+      ? null
+      : `${formatRetention(summary.retainMs)} (nothing older than ${stamp(
+          new Date(Date.parse(summary.availableTo) - summary.retainMs).toISOString(),
+        )})`;
+
   const lines = [
     "lwc — preset health history",
     "",
     `  runs          ${runs} (${stamp(summary.from)} → ${stamp(summary.to)})`,
+    ...(summary.runs === summary.totalRuns || coverage === null
+      ? []
+      : [`  covers        ${coverage} (${summary.totalRuns} recorded)`]),
     ...(window.length === 0 ? [] : [`  window        ${window.join(", ")}`]),
+    ...(retained === null ? [] : [`  retained      ${retained}`]),
     `  healthy       ${summary.healthyRuns} of ${summary.runs} runs`,
     `  failed        ${summary.failedRuns} runs`,
     `  failovers     ${summary.failoverRuns} runs served by a backup`,

@@ -66,11 +66,25 @@ try {
 }
 
 const records = file.records;
-const summary = summarizePresetHistory(records, {
-  since: args.since,
-  until: args.until,
-  limit: args.limit,
-});
+
+// The file records the retention it was actually written with; RETAIN_WINDOW is
+// the fallback for a file from before that header existed.
+const retainRaw = process.env.RETAIN_WINDOW ?? "";
+let envRetain = null;
+if (retainRaw !== "") {
+  try {
+    envRetain = parseRetentionMs(retainRaw);
+  } catch (error) {
+    usage(error instanceof Error ? error.message : String(error));
+  }
+}
+const retainMs = file.retainMs ?? envRetain;
+
+const summary = summarizePresetHistory(
+  records,
+  { since: args.since, until: args.until, limit: args.limit },
+  { retainMs },
+);
 const gate = summarizePresetGate(summary, args.failUnder);
 const comparison =
   args.compare === null
@@ -84,20 +98,8 @@ const markdown = [
   .join("\n\n");
 write(`${markdown}\n`);
 
-// The file records the retention it was actually written with; RETAIN_WINDOW is
-// the fallback for a file from before that header existed. Either way a gate or
-// comparison window that reaches past it is short for a reason that is not
-// provider failure.
-const retainRaw = process.env.RETAIN_WINDOW ?? "";
-let envRetain = null;
-if (retainRaw !== "") {
-  try {
-    envRetain = parseRetentionMs(retainRaw);
-  } catch (error) {
-    usage(error instanceof Error ? error.message : String(error));
-  }
-}
-const retainMs = file.retainMs ?? envRetain;
+// A gate or comparison window that reaches past the retention is short for a
+// reason that is not provider failure.
 for (const warning of retentionWindowWarnings(
   records.at(-1)?.at ?? null,
   retainMs,

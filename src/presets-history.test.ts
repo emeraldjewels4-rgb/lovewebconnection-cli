@@ -412,6 +412,38 @@ test("a merge keeps the tightest retention its inputs declared", () => {
   );
 });
 
+test("the summary names its retention and the span the file covers", () => {
+  const records = [
+    record("2026-05-01T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453)]),
+  ];
+
+  const summary = summarizePresetHistory(
+    records,
+    { since: Date.parse("2026-11-08T00:00:00Z") },
+    { retainMs: 30 * 86_400_000 },
+  );
+  assert.equal(summary.availableFrom, "2026-05-01T06:17:00.000Z");
+  assert.equal(summary.availableTo, "2026-11-09T06:17:00.000Z");
+  assert.equal(summary.retainMs, 30 * 86_400_000);
+
+  const text = formatPresetHistory(summary);
+  assert.match(text, /covers\s+2026-05-01 06:17 → 2026-11-09 06:17 \(3 recorded\)/);
+  assert.match(text, /retained\s+30 days \(nothing older than 2026-10-10 06:17\)/);
+});
+
+test("a history with no declared retention says nothing about one", () => {
+  const summary = summarizePresetHistory([
+    record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453)]),
+  ]);
+  const text = formatPresetHistory(summary);
+
+  assert.equal(summary.retainMs, null);
+  assert.doesNotMatch(text, /retained/);
+  assert.doesNotMatch(text, /covers/);
+});
+
 test("parses --merge inputs and --out as one combined history", () => {
   const args = parsePresetHistoryArgs([
     "presets.jsonl",

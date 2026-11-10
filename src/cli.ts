@@ -370,11 +370,11 @@ if (isPresetHistory) {
       console.error(`wrote ${history.length} runs → ${args.out}`);
     }
 
-    const summary = summarizePresetHistory(history, {
-      since: args.since,
-      until: args.until,
-      limit: args.limit,
-    });
+    const summary = summarizePresetHistory(
+      history,
+      { since: args.since, until: args.until, limit: args.limit },
+      { retainMs: declaredRetain },
+    );
     const comparison =
       args.compare === null
         ? null

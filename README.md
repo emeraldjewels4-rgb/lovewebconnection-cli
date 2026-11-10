@@ -197,7 +197,10 @@ shorter than its gate or comparison window into a
 provider that went dark. A written history records the span it was trimmed to in
 a leading `lwc_history` header line, so a later read of that file warns even
 without `--retain` on the command line: the file itself says which runs are
-simply gone.
+simply gone. The table header reports both numbers — `covers` is the span the
+file actually holds and `retained` the span it was trimmed to — so a windowed or
+trimmed view is visible without reading stderr; `--json` carries the same fields
+as `availableFrom`, `availableTo` and `retainMs`.
 
 The union is deduplicated by the whole run record: two copies of a run collapse,
 while runs recorded at the same instant with different results both stay. Every
