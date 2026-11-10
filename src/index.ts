@@ -370,6 +370,7 @@ export {
   comparePresetHistory,
   formatPresetHistory,
   formatPresetHistoryComparison,
+  mergePresetHistory,
   parsePresetHistoryArgs,
   presetHistoryCsv,
   presetHistoryTimelineCsv,
@@ -377,6 +378,7 @@ export {
   presetsBelowUptime,
   providerRegressionWarnings,
   readPresetHistory,
+  savePresetHistory,
   savePresetHistoryCsv,
   selectPresetHistory,
   summarizePresetGate,
@@ -386,6 +388,7 @@ export {
 } from "./presets-history.ts";
 
 export type {
+  PresetHistoryMerge,
   PresetHistoryRecord,
   PresetHistoryRow,
   PresetUptimeChange,

@@ -201,9 +201,19 @@ provider. A host that serves several chains is named once, so the log shows
 which upstream got worse — not just which chains — without opening the summary.
 
 The history outlives the cache. Each run restores `.lwc-history/presets.jsonl`
-from the Actions cache and then from a `preset-history` release asset, keeping
-whichever copy holds more runs, and an archive job with write access publishes
-the updated file back after the gate. Cache entries expire after a week of no
+from the Actions cache and the same file from a `preset-history` release asset,
+then merges the two rather than keeping whichever copy holds more runs: runs
+either copy still has are kept once, oldest first, and the union is what the
+probe appends to and the archive job publishes back after the gate. Restoring
+the union matters because a fresh runner starts with no cache and an entry idle
+for a week is evicted, so the shorter file is not always the staler one.
+
+Any number of history files combine the same way outside CI, which is how two
+machines' copies become one record:
+
+```bash
+node scripts/presets-history-merge.mjs merged.jsonl laptop.jsonl server.jsonl
+``` Cache entries expire after a week of no
 use and a paused schedule would lose the trend; the release keeps the whole
 record, which is what makes month-over-month windows possible away from CI:
 

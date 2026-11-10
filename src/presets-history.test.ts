@@ -10,6 +10,7 @@ import {
   comparePresetHistory,
   formatPresetHistory,
   formatPresetHistoryComparison,
+  mergePresetHistory,
   parsePresetHistoryArgs,
   presetHistoryCsv,
   presetComparisonMarkdown,
@@ -18,6 +19,7 @@ import {
   presetsBelowUptime,
   providerRegressionWarnings,
   readPresetHistory,
+  savePresetHistory,
   summarizePresetGate,
   summarizePresetHistory,
   summarizeProviderHistory,
@@ -106,6 +108,54 @@ test("readPresetHistory skips damaged lines and orders by time", (t) => {
   assert.equal(records.length, 2);
   assert.equal(records[0]?.at, "2026-11-10T06:17:00.000Z");
   assert.equal(records[1]?.at, "2026-11-11T06:17:00.000Z");
+});
+
+test("mergePresetHistory unions two copies of the same record, oldest first", () => {
+  const shared = record("2026-11-02T06:17:00.000Z", [endpoint("base", 8453)]);
+  const cache = [record("2026-11-01T06:17:00.000Z", [endpoint("base", 8453)]), shared];
+  const release = [shared, record("2026-11-03T06:17:00.000Z", [endpoint("base", 8453)])];
+
+  const merge = mergePresetHistory([release, cache]);
+
+  assert.deepEqual(
+    merge.records.map((entry) => entry.at),
+    ["2026-11-01T06:17:00.000Z", "2026-11-02T06:17:00.000Z", "2026-11-03T06:17:00.000Z"],
+  );
+  assert.equal(merge.duplicates, 1);
+  assert.deepEqual(merge.counts, [2, 2]);
+});
+
+test("a merge keeps two runs recorded at the same time when they differ", () => {
+  const merge = mergePresetHistory([
+    [record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)])],
+    [
+      record("2026-11-08T06:17:00.000Z", [
+        endpoint("base", 8453, { ok: false, latencyMs: null, blockNumber: null, error: "down" }),
+      ]),
+    ],
+  ]);
+
+  assert.equal(merge.records.length, 2);
+  assert.equal(merge.duplicates, 0);
+});
+
+test("savePresetHistory writes the file readPresetHistory reads back", (t) => {
+  const path = join(tempDir(t), "merged", "presets.jsonl");
+  const records = [
+    record("2026-11-01T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-02T06:17:00.000Z", [endpoint("optimism", 10)]),
+  ];
+
+  savePresetHistory(path, records);
+  const read = readPresetHistory(path);
+  assert.deepEqual(
+    read.map((entry) => entry.at),
+    records.map((entry) => entry.at),
+  );
+  assert.equal(read[0]?.endpoints[0]?.preset, "base");
+
+  savePresetHistory(path, []);
+  assert.equal(readFileSync(path, "utf8"), "");
 });
 
 test("summarizePresetHistory derives uptime, failovers and latency", () => {

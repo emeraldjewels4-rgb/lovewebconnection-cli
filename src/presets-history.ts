@@ -161,6 +161,66 @@ export function readPresetHistory(path: string): PresetHistoryRecord[] {
   return records.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
 
+/** The union of several history files, with what the merge had to drop. */
+export interface PresetHistoryMerge {
+  /** Every run from every input, oldest first, duplicates removed. */
+  records: PresetHistoryRecord[];
+  /** Runs that appeared in more than one input. */
+  duplicates: number;
+  /** Runs each input contributed, in the order they were passed. */
+  counts: number[];
+}
+
+/**
+ * A record's identity for merging, independent of key order: two copies of one
+ * run serialise the same fields, while two runs recorded at the same instant
+ * with different results stay separate runs.
+ */
+function recordKey(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(recordKey).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${recordKey(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * Combine history files into one. The cache and the release asset each keep
+ * runs the other may have lost, so restore their union instead of whichever
+ * file happens to be longer. Identical runs are kept once, oldest first.
+ */
+export function mergePresetHistory(inputs: PresetHistoryRecord[][]): PresetHistoryMerge {
+  const seen = new Set<string>();
+  const records: PresetHistoryRecord[] = [];
+  const counts = inputs.map((input) => input.length);
+
+  for (const input of inputs) {
+    for (const record of input) {
+      const key = recordKey(record);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      records.push(record);
+    }
+  }
+
+  records.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+
+  return {
+    records,
+    duplicates: counts.reduce((sum, count) => sum + count, 0) - records.length,
+    counts,
+  };
+}
+
+/** Write a whole history file, replacing it, and create its directory. */
+export function savePresetHistory(path: string, records: PresetHistoryRecord[]): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, records.map((record) => `${JSON.stringify(record)}\n`).join(""));
+}
+
 /** Nearest-rank percentile, matching the compare and sessions reports. */
 function percentile(values: number[], p: number): number | null {
   if (values.length === 0) return null;

@@ -80,16 +80,13 @@ jobs:
             echo "the durable copy is empty; keeping the cache"
             exit 0
           fi
-          cached_runs=0
-          if [ -s "$cached" ]; then cached_runs=$(wc -l < "$cached"); fi
-          durable_runs=$(wc -l < "$durable")
-          if [ "$durable_runs" -ge "$cached_runs" ]; then
-            mv "$durable" "$cached"
-            echo "restored $durable_runs runs from the release"
-          else
-            echo "the cache has $cached_runs runs, the release $durable_runs; keeping the cache"
-            rm -f "$durable"
-          fi
+          # Either copy can be missing runs the other still has: a fresh cache
+          # starts empty and a cache entry is evicted after a week without use.
+          # Restore their union, so a gap in one copy cannot shrink the window
+          # the gate judges, then let the probe append this run to it.
+          node scripts/presets-history-merge.mjs "$cached" "$cached" "$durable" \
+            || echo "::warning::could not merge the cache and the release; gating on the cache as restored"
+          rm -f "$durable"
 
       # The command already exits 1 when any endpoint is unhealthy, so its status
       # is the verdict. It is captured instead of aborting the step, so the
@@ -173,5 +170,7 @@ jobs:
               --notes "Machine-managed history of the scheduled preset probe. The workflow rewrites presets.jsonl on every run; do not edit it here." \
               --latest=false
           fi
+          # The file is already the union of the restored cache, the release and
+          # this run, so publishing it cannot drop a run the release still has.
           gh release upload preset-history "$file" --clobber
           echo "published $(wc -l < "$file") runs"
