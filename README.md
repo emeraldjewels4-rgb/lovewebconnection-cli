@@ -1,10 +1,11 @@
 # lwc — lovewebconnection
 
-<!-- Status badges. Replace every OWNER/REPO below with the GitHub slug
-     (owner/repo) once this repository lives on GitHub; until then the badge
-     images do not resolve. Both URLs in a line must use the same slug. -->
-[![Tests](https://github.com/OWNER/REPO/actions/workflows/tests.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/tests.yml)
-[![Migrations](https://github.com/OWNER/REPO/actions/workflows/migrations.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/migrations.yml)
+<!-- Status badges. Fiatgod is the GitHub account this project belongs to and
+     lovewebconnection is its package name. No repository exists under this slug
+     yet, so the images resolve only once it is created; if it is created under
+     another name, change the slug in both lines. -->
+[![Tests](https://github.com/Fiatgod/lovewebconnection/actions/workflows/tests.yml/badge.svg)](https://github.com/Fiatgod/lovewebconnection/actions/workflows/tests.yml)
+[![Migrations](https://github.com/Fiatgod/lovewebconnection/actions/workflows/migrations.yml/badge.svg)](https://github.com/Fiatgod/lovewebconnection/actions/workflows/migrations.yml)
 
 A read-only EVM chain connection kit. Point it at any EVM-compatible JSON-RPC
 endpoint, prove the connection is live, and build on the same client.
