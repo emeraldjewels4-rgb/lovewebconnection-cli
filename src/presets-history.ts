@@ -107,11 +107,14 @@ function percentile(values: number[], p: number): number | null {
   return sorted[rank - 1] ?? null;
 }
 
-export function summarizePresetHistory(
+/**
+ * Apply --since/--until/--limit to a history, oldest first. A limit is only
+ * ever used to look at recent runs, so it keeps the tail.
+ */
+export function selectPresetHistory(
   records: PresetHistoryRecord[],
   selection: PresetsHistorySelection = {},
-): PresetsHistorySummary {
-  const totalRuns = records.length;
+): PresetHistoryRecord[] {
   const since = selection.since ?? null;
   const until = selection.until ?? null;
   const limit = selection.limit ?? null;
@@ -122,9 +125,18 @@ export function summarizePresetHistory(
     if (until !== null && at > until) return false;
     return true;
   });
-  // A limit is only ever used to look at recent runs, so it keeps the tail.
-  const ordered =
-    limit === null ? inRange : inRange.slice(Math.max(0, inRange.length - limit));
+  return limit === null ? inRange : inRange.slice(Math.max(0, inRange.length - limit));
+}
+
+export function summarizePresetHistory(
+  records: PresetHistoryRecord[],
+  selection: PresetsHistorySelection = {},
+): PresetsHistorySummary {
+  const totalRuns = records.length;
+  const since = selection.since ?? null;
+  const until = selection.until ?? null;
+  const limit = selection.limit ?? null;
+  const ordered = selectPresetHistory(records, selection);
 
   interface Bucket {
     chainId: number;
@@ -410,6 +422,46 @@ export function savePresetHistoryCsv(path: string, csv: string): void {
   writeFileSync(path, `${csv}\n`);
 }
 
+/**
+ * One CSV row per preset per run, oldest first, for charting health over time
+ * rather than summarizing it: a failure keeps its latency and via cells blank.
+ */
+export function presetHistoryTimelineCsv(
+  records: PresetHistoryRecord[],
+  selection: PresetsHistorySelection = {},
+): string {
+  const header = [
+    "at",
+    "preset",
+    "chain",
+    "native",
+    "ok",
+    "via",
+    "latency_ms",
+    "block_number",
+    "rpc_host",
+    "error",
+    "primary_error",
+  ];
+  const rows = selectPresetHistory(records, selection).flatMap((record) =>
+    record.endpoints.map((endpoint) => [
+      record.at,
+      csvCell(endpoint.preset),
+      String(endpoint.chainId),
+      csvCell(endpoint.nativeSymbol),
+      endpoint.ok ? "true" : "false",
+      endpoint.ok ? (endpoint.viaFallback ? "backup" : "primary") : "",
+      endpoint.latencyMs === null ? "" : String(endpoint.latencyMs),
+      endpoint.blockNumber ?? "",
+      csvCell(endpoint.rpcHost),
+      csvCell(endpoint.error ?? ""),
+      csvCell(endpoint.primaryError ?? ""),
+    ]),
+  );
+
+  return [header.join(","), ...rows.map((cells) => cells.join(","))].join("\n");
+}
+
 export interface PresetsHistoryArgs {
   path: string;
   /** Epoch-ms cutoff from --since, or null for the whole file. */
@@ -422,6 +474,8 @@ export interface PresetsHistoryArgs {
   failUnder: number | null;
   /** Where to write the per-preset CSV, "-" for stdout, or null for the table. */
   csvPath: string | null;
+  /** Where to write the per-run timeline CSV, "-" for stdout, or null. */
+  timelinePath: string | null;
 }
 
 const SINCE_UNITS_MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
@@ -457,6 +511,7 @@ export function parsePresetHistoryArgs(
   let limit: number | null = null;
   let failUnder: number | null = null;
   let csvPath: string | null = null;
+  let timelinePath: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
@@ -511,6 +566,14 @@ export function parsePresetHistoryArgs(
       if (inline === null) index += 1;
       if (!value) throw new PresetsHistoryArgError("--csv requires a path, or - for stdout.");
       csvPath = value;
+    } else if (arg === "--timeline" || arg.startsWith("--timeline=")) {
+      const inline = arg.startsWith("--timeline=") ? arg.slice("--timeline=".length) : null;
+      const value = inline ?? argv[index + 1] ?? "";
+      if (inline === null) index += 1;
+      if (!value) {
+        throw new PresetsHistoryArgError("--timeline requires a path, or - for stdout.");
+      }
+      timelinePath = value;
     } else if (arg.startsWith("-")) {
       throw new PresetsHistoryArgError(`unexpected flag "${arg}".`);
     } else if (path !== null) {
@@ -524,7 +587,10 @@ export function parsePresetHistoryArgs(
   if (since !== null && until !== null && until < since) {
     throw new PresetsHistoryArgError("--until must not be earlier than --since.");
   }
-  return { path, since, until, limit, failUnder, csvPath };
+  if (csvPath !== null && timelinePath !== null) {
+    throw new PresetsHistoryArgError("--csv and --timeline are different exports; pass one.");
+  }
+  return { path, since, until, limit, failUnder, csvPath, timelinePath };
 }
 
 export type { PresetsReport, PresetEndpoint };

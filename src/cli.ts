@@ -177,6 +177,7 @@ import {
   formatPresetHistory,
   parsePresetHistoryArgs,
   presetHistoryCsv,
+  presetHistoryTimelineCsv,
   presetsBelowUptime,
   readPresetHistory,
   savePresetHistoryCsv,
@@ -298,13 +299,27 @@ if (isPresetHistory) {
   let historyPath = "";
   try {
     const args = parsePresetHistoryArgs(flags);
-    historyPath = args.path;
-    const summary = summarizePresetHistory(readPresetHistory(historyPath), {
+    historyPath = args.path;    const records = readPresetHistory(historyPath);
+    const summary = summarizePresetHistory(records, {
       since: args.since,
       until: args.until,
       limit: args.limit,
     });
-    if (args.csvPath !== null) {
+
+    if (args.timelinePath !== null) {
+      const csv = presetHistoryTimelineCsv(records, {
+        since: args.since,
+        until: args.until,
+        limit: args.limit,
+      });
+      if (args.timelinePath === "-") {
+        console.log(csv);
+      } else {
+        savePresetHistoryCsv(args.timelinePath, csv);
+        const rows = csv.split("\n").length - 1;
+        console.log(`wrote ${rows} row${rows === 1 ? "" : "s"} → ${args.timelinePath}`);
+      }
+    } else if (args.csvPath !== null) {
       const csv = presetHistoryCsv(summary);
       if (args.csvPath === "-") {
         console.log(csv);

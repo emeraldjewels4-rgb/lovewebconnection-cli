@@ -128,6 +128,7 @@ lwc presets-history .lwc-history/presets.jsonl --since 7d    # this week only
 lwc presets-history .lwc-history/presets.jsonl --limit 20    # the newest 20
 lwc presets-history .lwc-history/presets.jsonl --since 7d --until 1d
 lwc presets-history .lwc-history/presets.jsonl --since 7d --csv ./presets.csv
+lwc presets-history .lwc-history/presets.jsonl --since 7d --timeline ./timeline.csv
 lwc presets-history .lwc-history/presets.jsonl --since 7d --fail-under 99
 ```
 
@@ -152,6 +153,12 @@ window — runs, healthy, failed, failovers, uptime, p50 and max latency, and th
 last run and failure — so the window can be charted or pasted into a
 spreadsheet. The filters apply before the export, and `--fail-under` still gates
 on the same window when a CSV is written.
+
+`--timeline <path>` (or `-`) exports the same window at per-run granularity —
+one row per preset per run, oldest first, with `ok`, `via`, latency, block,
+host and both error fields — so uptime and latency can be plotted as a time
+series instead of collapsed into a window summary. `--csv` and `--timeline` are
+separate exports and cannot be combined.
 
 `--fail-under <pct>` turns the view into a gate: it exits 1 when any preset's
 uptime inside the window is below the percentage, naming each offender on stderr

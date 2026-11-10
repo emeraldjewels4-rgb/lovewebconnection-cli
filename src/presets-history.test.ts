@@ -10,6 +10,7 @@ import {
   formatPresetHistory,
   parsePresetHistoryArgs,
   presetHistoryCsv,
+  presetHistoryTimelineCsv,
   presetsBelowUptime,
   readPresetHistory,
   summarizePresetGate,
@@ -182,6 +183,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     limit: null,
     failUnder: null,
     csvPath: null,
+    timelinePath: null,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--json"]), {
     path: "history.jsonl",
@@ -190,6 +192,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     limit: null,
     failUnder: null,
     csvPath: null,
+    timelinePath: null,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--csv", "-"]), {
     path: "history.jsonl",
@@ -198,9 +201,19 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     limit: null,
     failUnder: null,
     csvPath: "-",
+    timelinePath: null,
   });
+  assert.equal(parsePresetHistoryArgs(["h.jsonl", "--timeline", "-"]).timelinePath, "-");
 
-  for (const argv of [[], ["a.jsonl", "b.jsonl"], ["--bogus"], ["-x"], ["h.jsonl", "--csv"]]) {
+  for (const argv of [
+    [],
+    ["a.jsonl", "b.jsonl"],
+    ["--bogus"],
+    ["-x"],
+    ["h.jsonl", "--csv"],
+    ["h.jsonl", "--timeline"],
+    ["h.jsonl", "--csv", "a.csv", "--timeline", "b.csv"],
+  ]) {
     assert.throws(
       () => parsePresetHistoryArgs(argv),
       (error: unknown) => error instanceof PresetsHistoryArgError,
@@ -225,6 +238,7 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
     limit: 2,
     failUnder: null,
     csvPath: null,
+    timelinePath: null,
   });
 
   for (const argv of [
@@ -257,6 +271,7 @@ test("parses --until as a closed end, and rejects an inverted window", () => {
     limit: null,
     failUnder: null,
     csvPath: null,
+    timelinePath: null,
   });
 
   for (const argv of [
@@ -544,6 +559,66 @@ test("presetHistoryCsv follows the window it is given", () => {
     presetHistoryCsv(summary).split("\n")[1],
     "base,8453,ETH,1,1,0,0,100,40,40,2026-11-10T06:17:00.000Z,",
   );
+});
+
+test("presetHistoryTimelineCsv exports one row per preset per run, oldest first", () => {
+  const lines = presetHistoryTimelineCsv([
+    record("2026-11-10T06:17:00.000Z", [
+      endpoint("base", 8453, { latencyMs: 100 }),
+      endpoint("ethereum", 1, { latencyMs: 150 }),
+    ]),
+    record("2026-11-09T06:17:00.000Z", [
+      endpoint("base", 8453, {
+        viaFallback: true,
+        primaryError: "HTTP request failed.",
+        rpcHost: "base-rpc.publicnode.com",
+        latencyMs: 5000,
+        blockNumber: 1100n,
+      }),
+      endpoint("ethereum", 1, {
+        ok: false,
+        latencyMs: null,
+        blockNumber: null,
+        rpcHost: "ethereum.example.org",
+        error: "both endpoints failed for ethereum (1)",
+      }),
+    ]),
+  ]).split("\n");
+
+  assert.equal(
+    lines[0],
+    "at,preset,chain,native,ok,via,latency_ms,block_number,rpc_host,error,primary_error",
+  );
+  assert.equal(
+    lines[1],
+    "2026-11-09T06:17:00.000Z,base,8453,ETH,true,backup,5000,1100,base-rpc.publicnode.com,,HTTP request failed.",
+  );
+  assert.equal(
+    lines[2],
+    "2026-11-09T06:17:00.000Z,ethereum,1,ETH,false,,,,ethereum.example.org,both endpoints failed for ethereum (1),",
+  );
+  assert.equal(
+    lines[3],
+    "2026-11-10T06:17:00.000Z,base,8453,ETH,true,primary,100,1000,primary.example.org,,",
+  );
+  assert.equal(lines.length, 5);
+});
+
+test("presetHistoryTimelineCsv follows the window it is given", () => {
+  const records = [
+    record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-10T06:17:00.000Z", [endpoint("base", 8453)]),
+  ];
+
+  const limited = presetHistoryTimelineCsv(records, { limit: 1 }).split("\n");
+  assert.equal(limited.length, 2);
+  assert.match(limited[1] ?? "", /^2026-11-10T06:17:00\.000Z,base,/);
+
+  const since = presetHistoryTimelineCsv(records, {
+    since: Date.parse("2026-11-10T00:00:00Z"),
+  }).split("\n");
+  assert.equal(since.length, 2);
+  assert.match(since[1] ?? "", /^2026-11-10T06:17:00\.000Z,base,/);
 });
 
 test("a recorded run is what the history view reads back", (t) => {
