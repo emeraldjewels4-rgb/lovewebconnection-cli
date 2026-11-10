@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "baseSymbol": "ZPC",
+  "quoteSymbol": "BTC",
+  "baseDecimals": 18,
+  "quoteDecimals": 8,
+  "priceNum": "1",
+  "priceDen": "40000000",
+  "feeBps": 30,
+  "baseReserve": "1800600000000000000",
+  "quoteReserve": "55000000000",
+  "shares": "100000000000",
+  "volumeQuote": "5000000000",
+  "swaps": 1,
+  "openedBase": "2000000000000000000",
+  "openedQuote": "50000000000"
+}

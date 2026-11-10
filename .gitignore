@@ -1,0 +1,20 @@
+node_modules/
+.lwc-cache/
+.env
+.env.*
+!.env.example
+*.log
+*.tsbuildinfo
+dist/
+
+# Local scratch: demo pools, screenshots, extracted page scripts
+.lwc-demo/
+.pack-test/
+threads/
+
+# Packing and upload artifacts
+*.tgz
+*.zip
+
+# Runtime state written by `lwc market serve` (rate-limit counters)
+*.limits.json

@@ -1,0 +1,1063 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8">
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>web9999 — database-backed chain view</title>
+    <!-- Inlined for the reason the dashboard inlines its own: this page is a single
+         file with no public/ directory, so a /favicon.ico link has nothing behind
+         it and asks the host for a file that does not exist on every load. A data
+         URI is the only reference that survives both builds. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%23020617'/%3E%3Cpath%20d='M12%209%206%2016l6%207M20%209l6%207-6%207'%20fill='none'%20stroke='%23f97316'%20stroke-width='2.5'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #08090c;
+        --panel: #101218;
+        --line: #1f2430;
+        --ink: #e8ecf4;
+        --dim: #8c96a8;
+        --good: #3ddc84;
+        --bad: #ff6b6b;
+        --warn: #f0b429;
+        --accent: #7c5cff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 32px 20px 64px;
+        background: radial-gradient(1200px 500px at 50% -10%, #171a2b 0%, var(--bg) 60%);
+        color: var(--ink);
+        font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      main { max-width: 1000px; margin: 0 auto; }
+      header { margin-bottom: 24px; }
+      .tag {
+        display: inline-block;
+        padding: 3px 9px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--dim);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      h1 { margin: 12px 0 6px; font-size: 34px; letter-spacing: -0.02em; }
+      h1 span { color: var(--accent); }
+      h2 { margin: 30px 0 10px; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
+      p.lede { margin: 0; max-width: 68ch; color: var(--dim); }
+      .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin: 22px 0; }
+      .card { padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+      .card .k { color: var(--dim); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+      .card .v { margin-top: 6px; font-size: 22px; font-variant-numeric: tabular-nums; }
+      table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+      th, td { padding: 11px 14px; text-align: left; border-top: 1px solid var(--line); vertical-align: top; font-size: 14px; }
+      thead th { border-top: 0; color: var(--dim); font-weight: 600; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; }
+      td.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+      .yes { color: var(--good); }
+      .no { color: var(--bad); }
+      .warn { color: var(--warn); }
+      .note { color: var(--dim); font-size: 13px; }
+      .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; vertical-align: middle; background: var(--dim); }
+      .dot.ok { background: var(--good); }
+      .dot.bad { background: var(--bad); }
+      .dot.warn { background: var(--warn); }
+      .wallet { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+      .wallet .who { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+      ul.links { list-style: none; display: flex; flex-wrap: wrap; gap: 10px; padding: 0; margin: 30px 0 0; }
+      ul.links a {
+        display: block; padding: 9px 14px; border: 1px solid var(--line); border-radius: 10px;
+        color: var(--ink); text-decoration: none; background: #0c0e14;
+      }
+      ul.links a:hover { border-color: var(--accent); }
+      footer { margin-top: 34px; color: var(--dim); font-size: 12px; }
+      .err { border: 1px solid var(--bad); color: var(--bad); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="tag">replaces /web3/</span>
+        <h1>web<span>9999</span></h1>
+        <p class="lede">
+          The Web3 tab's view, read back out of this account's MySQL databases and the same
+          public RPC endpoints the app probes. The old <span class="mono">/web3/</span> paths
+          redirect here. web9999 is a name used on this host, not a published standard.
+        </p>
+      </header>
+
+      <div id="error" class="err" hidden></div>
+
+      <section class="grid" aria-live="polite">
+        <div class="card"><div class="k">Chain</div><div class="v" id="chain-id">—</div></div>
+        <div class="card"><div class="k">Head</div><div class="v" id="chain-head">—</div></div>
+        <div class="card"><div class="k">Indexed to</div><div class="v" id="indexed">—</div></div>
+        <div class="card"><div class="k">Index lag</div><div class="v" id="lag">—</div></div>
+        <div class="card"><div class="k">Markets</div><div class="v" id="markets">—</div></div>
+        <div class="card"><div class="k">Monero (XMR)</div><div class="v" id="xmr-price">—</div></div>
+        <div class="card"><div class="k">Coins in MySQL</div><div class="v" id="coins-count">—</div></div>
+      </section>
+
+      <h2>Wallet</h2>
+      <div class="wallet">
+        <!-- Visible affordance until the client exists. <appkit-button> renders
+             nothing before then, and loading that client costs ~920 module
+             requests from esm.sh, so it is fetched on intent, not on idle. -->
+        <button id="wallet-connect" type="button">Connect wallet</button>
+        <appkit-button size="sm"></appkit-button>
+        <div>
+          <div class="who" id="wallet-address">no wallet connected</div>
+          <div class="note" id="wallet-status">
+            The same Reown AppKit button the app and the exchange page use. Your keys stay in
+            the wallet; this page only reads an address and a balance.
+          </div>
+        </div>
+      </div>
+
+      <h2>
+        Chains, from the app's own table
+        <span class="note" id="chain-summary" style="text-transform:none; letter-spacing:0">—</span>
+      </h2>
+      <table id="chains">
+        <thead>
+          <tr>
+            <th>Network</th>
+            <th>Chain</th>
+            <th>Endpoint</th>
+            <th>Answers</th>
+            <th>DEX</th>
+          </tr>
+        </thead>
+        <tbody><tr><td colspan="5" class="note">reading…</td></tr></tbody>
+      </table>
+
+      <h2>Databases on this account</h2>
+      <table id="databases">
+        <thead>
+          <tr>
+            <th>Database</th>
+            <th>Reachable</th>
+            <th>Engine</th>
+            <th>What is in it</th>
+          </tr>
+        </thead>
+        <tbody><tr><td colspan="4" class="note">reading…</td></tr></tbody>
+      </table>
+
+      <h2>
+        <a href="https://blockchair.com/monero" target="_blank" rel="noopener">Monero, from Blockchair</a>
+        <span class="note" id="monero-status" style="text-transform:none; letter-spacing:0">reading…</span>
+      </h2>
+      <table id="monero">
+        <thead>
+          <tr>
+            <th>Reading</th>
+            <th>Value</th>
+            <th>What it means</th>
+          </tr>
+        </thead>
+        <tbody><tr><td colspan="3" class="note">reading…</td></tr></tbody>
+      </table>
+      <p class="note" style="margin:10px 0 0">
+        Read by this host, not by your browser: one
+        <span class="mono">/api/monero/stats.php</span> reading is shared by every
+        visitor for a minute, so Blockchair's metered free plan is spent once rather
+        than once per tab — and any key it ever needs stays on the server instead of
+        in this page.
+      </p>
+
+      <h2>
+        Coins in MySQL, refreshed from Blockchair
+        <span class="note" id="coins-status" style="text-transform:none; letter-spacing:0">reading…</span>
+      </h2>
+      <table id="coins-db">
+        <thead>
+          <tr>
+            <th>Chain</th>
+            <th>Price</th>
+            <th>Blocks</th>
+            <th>Mempool</th>
+            <th>Last read</th>
+          </tr>
+        </thead>
+        <tbody><tr><td colspan="5" class="note">reading…</td></tr></tbody>
+      </table>
+      <p class="note" style="margin:10px 0 0">
+        Read from <span class="mono">fiatgodx_web9999</span> by
+        <span class="mono">/api/web9999/coins</span>, which the browser calls instead of
+        calling Blockchair. The refresh needs the host's token or a shell run, so a
+        visitor cannot spend the plan; a chain that refused keeps its row, its
+        refusal and its timestamp rather than disappearing.
+      </p>
+
+      <h2>
+        All cryptocurrencies, by position
+        <span class="note" id="markets-status" style="text-transform:none; letter-spacing:0">reading…</span>
+      </h2>
+      <table id="markets-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Coin</th>
+            <th>Price</th>
+            <th>24h</th>
+            <th>Blocks</th>
+            <th>Mempool</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody><tr><td colspan="5" class="note">reading…</td></tr></tbody>
+      </table>
+      <p class="note" style="margin:10px 0 0">
+        Every currency <span class="mono">/api/markets</span> carries, in the position it
+        publishes — one response for the whole list, not one request per coin. The table
+        above is a different set: the seventeen chains this host reads from MySQL. Every row links to Blockchair
+        where that chain is supported there, including Monero; the rest link to their
+        CoinGecko market page. Where the host reads the chain, the row also carries that chain's latest Blockchair block height and mempool from <span class="mono">/api/web9999/coins</span>, so the market list needs no per-row request.
+      </p>
+
+      <ul class="links">
+        <li><a href="/">Dashboard</a></li>
+        <li><a href="/scan/">Explorer</a></li>
+        <li><a href="/exchange/">Exchange</a></li>
+        <li><a href="/zipchain/">ZipChain</a></li>
+        <li><a href="/api/web9999/" class="mono">/api/web9999/</a></li>
+        <li><a href="/web9999/downloads.php">Downloads</a></li>
+      </ul>
+
+      <footer>
+        Counts are read live on each load and never cached. Every database on the
+        account is probed with the explorer's own connection, so a refusal reports the
+        database's own error rather than a sentence written into this page — a fixed
+        "not granted" was here once, and it kept saying so after the grants existed.
+        Chain endpoints are probed with <span class="mono">eth_chainId</span>, and a node
+        that answers another chain is called out rather than shown as healthy.
+      </footer>
+    </main>
+
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      const num = (value) => (typeof value === 'number' ? value.toLocaleString('en-US') : null);
+      const host = (url) => {
+        try { return new URL(url).host; } catch { return url || '—'; }
+      };
+
+      /* ------------------------------------------------------------- databases */
+
+      function describe(row) {
+        if (!row.reachable) return row.reason || 'unreachable';
+        const parts = [];
+        if (row.rows) {
+          for (const [key, value] of Object.entries(row.rows)) {
+            if (value != null) parts.push(`${value.toLocaleString('en-US')} ${key}`);
+          }
+        }
+        if (row.chain_height != null) parts.push(`height ${row.chain_height.toLocaleString('en-US')}`);
+        if (row.indexed_to != null) parts.push(`indexed to block ${row.indexed_to.toLocaleString('en-US')}`);
+        if (row.tables != null) parts.push(`${row.tables} table${row.tables === 1 ? '' : 's'}`);
+        return parts.join(' · ') || 'connected, nothing to report';
+      }
+
+      function renderDatabases(rows) {
+        const body = $('databases').querySelector('tbody');
+        body.replaceChildren();
+        for (const row of rows) {
+          const tr = document.createElement('tr');
+
+          const name = document.createElement('td');
+          name.className = 'mono';
+          name.textContent = row.name;
+          const label = document.createElement('div');
+          label.className = 'note';
+          label.textContent = row.label || '';
+          name.appendChild(label);
+
+          const ok = document.createElement('td');
+          ok.className = row.reachable ? 'yes' : 'no';
+          ok.textContent = row.reachable ? 'yes' : 'no';
+
+          const engine = document.createElement('td');
+          engine.className = 'mono note';
+          engine.textContent = row.engine || '—';
+
+          const what = document.createElement('td');
+          what.textContent = describe(row);
+
+          tr.append(name, ok, engine, what);
+          body.appendChild(tr);
+        }
+      }
+
+      async function loadStatus() {
+        try {
+          const response = await fetch('/api/web9999/', { headers: { Accept: 'application/json' } });
+          const status = await response.json();
+          if (!response.ok || !status.ok) throw new Error(status.error || `HTTP ${response.status}`);
+
+          $('chain-id').textContent = `${status.chain.name} · ${status.chain.id}`;
+          $('chain-head').textContent = num(status.chain.head) ?? '—';
+          const explorer = (status.databases || []).find((row) => row.indexed_to != null);
+          $('indexed').textContent = explorer ? num(explorer.indexed_to) : '—';
+          const lag = $('lag');
+          lag.textContent = status.index_lag_blocks == null ? '—' : num(status.index_lag_blocks);
+          lag.style.color = status.index_lag_blocks > 500 ? 'var(--warn)' : 'inherit';
+
+          renderDatabases(status.databases || []);
+        } catch (error) {
+          const box = $('error');
+          box.hidden = false;
+          box.textContent = `web9999 cannot read its API: ${error.message}`;
+        }
+
+        try {
+          const markets = await (await fetch('/api/markets', { headers: { Accept: 'application/json' } })).json();
+          if (Array.isArray(markets.coins)) $('markets').textContent = num(markets.coins.length);
+        } catch {
+          $('markets').textContent = 'unavailable';
+        }
+      }
+
+      /* ---------------------------------------------------------------- chains */
+
+      /**
+       * The app's probe: ask each endpoint for its chain id and compare it with the
+       * id the table claims. A node answering another chain is a fork or a swapped
+       * URL, and reading balances from it would be reading someone else's account,
+       * so it is reported as wrong rather than as healthy.
+       */
+      async function probe(network) {
+        if (!network.rpcUrl) return { state: 'none' };
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6000);
+        try {
+          const response = await fetch(network.rpcUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] }),
+            signal: controller.signal,
+          });
+          if (!response.ok) return { state: 'down', detail: `HTTP ${response.status}` };
+          const body = await response.json();
+          const reported = typeof body.result === 'string' ? body.result.toLowerCase() : null;
+          if (reported === null) return { state: 'down', detail: 'no chain id in the answer' };
+          return reported === network.chainId.toLowerCase()
+            ? { state: 'ok', reported }
+            : { state: 'wrong-chain', reported };
+        } catch {
+          return { state: 'down', detail: 'no answer' };
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
+      function answerCell(result) {
+        const cell = document.createElement('td');
+        const dot = document.createElement('span');
+        dot.className = `dot ${result.state === 'ok' ? 'ok' : result.state === 'wrong-chain' ? 'warn' : 'bad'}`;
+        cell.appendChild(dot);
+        if (result.state === 'ok') cell.appendChild(document.createTextNode('answering'));
+        else if (result.state === 'wrong-chain') {
+          cell.appendChild(document.createTextNode(`answers chain ${parseInt(result.reported, 16)}, not this one`));
+        } else if (result.state === 'none') {
+          cell.appendChild(document.createTextNode('no endpoint configured'));
+        } else {
+          cell.appendChild(document.createTextNode('not responding'));
+        }
+        if (result.detail) {
+          cell.appendChild(document.createTextNode(' '));
+          const detail = document.createElement('span');
+          detail.className = 'note';
+          detail.textContent = result.detail;
+          cell.appendChild(detail);
+        }
+        return cell;
+      }
+
+      async function loadChains() {
+        const body = $('chains').querySelector('tbody');
+        let networks;
+        try {
+          const response = await fetch('/web9999/networks.json', { headers: { Accept: 'application/json' } });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          networks = (await response.json()).networks;
+          if (!Array.isArray(networks)) throw new Error('networks.json has no networks');
+        } catch (error) {
+          body.replaceChildren();
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 5;
+          td.className = 'no';
+          td.textContent = `networks.json is missing from this build (${error.message}) — rebuild with build.mjs`;
+          tr.appendChild(td);
+          body.appendChild(tr);
+          $('chain-summary').textContent = '';
+          return;
+        }
+
+        const probeable = networks.filter((network) => network.rpcUrl);
+        let ok = 0;
+        let wrong = 0;
+        let down = 0;
+
+        body.replaceChildren();
+        for (const network of networks) {
+          const tr = document.createElement('tr');
+
+          const name = document.createElement('td');
+          name.textContent = network.name;
+          if (network.symbol) {
+            const symbol = document.createElement('div');
+            symbol.className = 'note mono';
+            symbol.textContent = network.symbol;
+            name.appendChild(symbol);
+          }
+
+          const chain = document.createElement('td');
+          chain.className = 'mono';
+          chain.textContent = network.chainId;
+
+          const endpoint = document.createElement('td');
+          endpoint.className = 'mono note';
+          endpoint.textContent = network.rpcUrl ? host(network.rpcUrl) : '—';
+
+          const result = await probe(network);
+          if (result.state === 'ok') ok += 1;
+          else if (result.state === 'wrong-chain') wrong += 1;
+          else if (result.state === 'down') down += 1;
+
+          const dex = document.createElement('td');
+          dex.className = 'note';
+          dex.textContent = network.dex ? network.dex.label : '—';
+
+          tr.append(name, chain, endpoint, answerCell(result), dex);
+          body.appendChild(tr);
+        }
+
+        $('chain-summary').textContent = [
+          `${ok}/${probeable.length} answering`,
+          wrong > 0 ? `${wrong} on another chain` : '',
+          down > 0 ? `${down} not responding` : '',
+        ].filter(Boolean).join(' · ');
+      }
+
+      /* ---------------------------------------------------------------- monero */
+
+      /**
+       * Monero, from Blockchair, through this host's own endpoint.
+       *
+       * The page never calls Blockchair itself. The endpoint holds one reading for
+       * 60 seconds for every visitor and hands back the last good one marked
+       * `stale` rather than nothing, so a metered plan is spent once a minute and a
+       * hiccup upstream shows as an old number, labelled, instead of an empty panel.
+       *
+       * Every value here is printed because the endpoint published it; nothing is
+       * derived on the page except unit formatting. That is why there is no 24h
+       * change: Blockchair's stats payload does not carry one, and a zero would read
+       * as "flat" when the truth is "not known".
+       */
+      function moneroRow(label, value, meaning) {
+        const tr = document.createElement('tr');
+        const name = document.createElement('td');
+        name.textContent = label;
+        const val = document.createElement('td');
+        val.className = 'mono';
+        val.textContent = value;
+        const note = document.createElement('td');
+        note.className = 'note';
+        note.textContent = meaning;
+        tr.append(name, val, note);
+        return tr;
+      }
+
+      function hashrate(rate) {
+        if (typeof rate !== 'number' || !(rate > 0)) return '—';
+        if (rate >= 1e12) return `${(rate / 1e12).toFixed(2)} TH/s`;
+        if (rate >= 1e9) return `${(rate / 1e9).toFixed(2)} GH/s`;
+        if (rate >= 1e6) return `${(rate / 1e6).toFixed(2)} MH/s`;
+        return `${rate.toFixed(0)} H/s`;
+      }
+
+      async function loadMonero() {
+        const body = $('monero').querySelector('tbody');
+        const status = $('monero-status');
+        try {
+          const response = await fetch('/api/monero/stats.php', {
+            headers: { Accept: 'application/json' },
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+
+          const chain = payload.chain || {};
+          const coin = payload.coin || {};
+
+          $('xmr-price').textContent =
+            typeof coin.price === 'number'
+              ? `$${coin.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+              : '—';
+
+          body.replaceChildren(
+            moneroRow('Block height', num(chain.height) ?? '—', `best known ${num(chain.best_block_height) ?? '—'}`),
+            moneroRow('Transactions', num(chain.transactions) ?? '—', 'confirmed, all time'),
+            moneroRow(
+              'Mempool',
+              num(chain.mempool_transactions) ?? '—',
+              typeof chain.mempool_bytes === 'number'
+                ? `${(chain.mempool_bytes / 1e6).toFixed(1)} MB waiting`
+                : 'waiting',
+            ),
+            moneroRow('Difficulty', num(chain.difficulty) ?? '—', 'current network difficulty'),
+            moneroRow('Hashrate', hashrate(chain.hashrate_24h), '24h average'),
+            moneroRow(
+              'Supply',
+              typeof chain.circulation_xmr === 'number'
+                ? `${chain.circulation_xmr.toLocaleString('en-US')} XMR`
+                : '—',
+              'emitted, converted from piconero',
+            ),
+            moneroRow(
+              'Market cap',
+              typeof coin.market_cap_usd === 'number'
+                ? `$${coin.market_cap_usd.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+                : '—',
+              'as Blockchair reports it',
+            ),
+          );
+
+          const when =
+            typeof payload.ts === 'number' ? new Date(payload.ts * 1000).toLocaleTimeString() : '—';
+          status.textContent = payload.stale
+            ? `stale — last good reading at ${when}`
+            : `Blockchair ${payload.upstream?.api_version ?? 'API'} · read ${when}`;
+        } catch (error) {
+          body.replaceChildren();
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 3;
+          td.className = 'no';
+          td.textContent = `the Monero feed did not answer: ${error?.message ?? error}`;
+          tr.appendChild(td);
+          body.appendChild(tr);
+          $('xmr-price').textContent = '—';
+          status.textContent = 'unavailable';
+        }
+      }
+
+      /* ----------------------------------------------------------------- coins */
+
+      const usd = (value) =>
+        typeof value === 'number'
+          ? `$${value.toLocaleString('en-US', { maximumFractionDigits: value < 1 ? 6 : 2 })}`
+          : '—';
+
+      function coinsRow(row) {
+        const tr = document.createElement('tr');
+
+        const name = document.createElement('td');
+        const chainLink = document.createElement('a');
+        chainLink.href = 'https://blockchair.com/' + encodeURIComponent(String(row.chain ?? ''));
+        chainLink.textContent = row.name ?? row.chain ?? '—';
+        chainLink.target = '_blank';
+        chainLink.rel = 'noopener';
+        name.appendChild(chainLink);
+        const symbol = document.createElement('div');
+        symbol.className = 'note mono';
+        symbol.textContent = row.symbol;
+        name.appendChild(symbol);
+
+        const price = document.createElement('td');
+        price.className = 'mono';
+        price.textContent = usd(row.price_usd);
+
+        const blocks = document.createElement('td');
+        blocks.className = 'mono';
+        blocks.textContent = num(row.blocks) ?? '—';
+
+        const mempool = document.createElement('td');
+        mempool.className = 'mono';
+        mempool.textContent = num(row.mempool) ?? '—';
+
+        const read = document.createElement('td');
+        read.className = row.error ? 'no' : 'note';
+        read.textContent = row.error
+          ? row.error
+          : row.read_at
+            ? new Date(row.read_at * 1000).toLocaleTimeString()
+            : 'never read';
+
+        tr.append(name, price, blocks, mempool, read);
+        return tr;
+      }
+
+      /**
+       * The coin table, from this host's MySQL through `/api/web9999/coins`.
+       *
+       * Nothing is computed here that the database did not store: a chain with no
+       * reading prints "never read", not a zero, and a refusal prints the reason
+       * beside its timestamp. `needs_schema` is its own branch because an empty
+       * table and an uncreated table look identical on screen otherwise, and only
+       * one of them is a deployment step someone forgot.
+       */
+      async function loadCoinsDb() {
+        const body = $('coins-db').querySelector('tbody');
+        const status = $('coins-status');
+        const count = $('coins-count');
+        try {
+          const response = await fetch('/api/web9999/coins', {
+            headers: { Accept: 'application/json' },
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+
+          if (payload.needs_schema) {
+            body.replaceChildren();
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = 5;
+            td.className = 'note';
+            td.textContent = payload.hint || 'the coin tables have not been created yet';
+            tr.appendChild(td);
+            body.appendChild(tr);
+            count.textContent = '0';
+            status.textContent = 'tables missing';
+            return;
+          }
+
+          const rows = Array.isArray(payload.coins) ? payload.coins : [];
+          body.replaceChildren(...rows.map(coinsRow));
+          count.textContent = num(payload.count) ?? '0';
+
+          const reads = rows.filter((row) => row.read_at).map((row) => row.read_at).sort((a, b) => b - a);
+          const when = reads.length > 0 ? new Date(reads[0] * 1000).toLocaleString() : 'never';
+          const refused = rows.filter((row) => row.error).length;
+          status.textContent = [
+            `${rows.length} chain${rows.length === 1 ? '' : 's'} from ${payload.database ?? 'MySQL'}`,
+            payload.stale ? `stale — last read ${when}` : `last read ${when}`,
+            refused > 0 ? `${refused} refused` : '',
+          ]
+            .filter(Boolean)
+            .join(' · ');
+        } catch (error) {
+          body.replaceChildren();
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 5;
+          td.className = 'no';
+          td.textContent = `the coin table did not answer: ${error?.message ?? error}`;
+          tr.appendChild(td);
+          body.appendChild(tr);
+          count.textContent = '—';
+          status.textContent = 'unavailable';
+        }
+      }
+
+      /* --------------------------------------------------------------- markets */
+
+      // Every currency the market API carries, in its own published rank order. The
+      // whole list is one response, so this costs one request per page load rather
+      // than 250 — and the order printed is the API's, because re-sorting here could
+      // disagree with the position beside it.
+      // Blockchair slugs for every chain this host keeps in MySQL. A market
+      // row links to the explorer when its symbol is one of them; everything
+      // else links to its CoinGecko market page.
+      const BLOCKCHAIR_CHAINS = new Map([
+        ['BTC', 'bitcoin'],
+        ['ETH', 'ethereum'],
+        ['BCH', 'bitcoin-cash'],
+        ['BSV', 'bitcoin-sv'],
+        ['LTC', 'litecoin'],
+        ['DOGE', 'dogecoin'],
+        ['DASH', 'dash'],
+        ['XMR', 'monero'],
+        ['ZEC', 'zcash'],
+        ['XEC', 'ecash'],
+        ['GRS', 'groestlcoin'],
+        ['XRP', 'ripple'],
+        ['XLM', 'stellar'],
+        ['ADA', 'cardano'],
+        ['XTZ', 'tezos'],
+        ['TRX', 'tron'],
+        ['EOS', 'eos'],
+      ]);
+
+      function marketRow(coin) {
+        const tr = document.createElement('tr');
+
+        const rank = document.createElement('td');
+        rank.className = 'mono';
+        rank.textContent = num(coin.rank) ?? '—';
+
+        const name = document.createElement('td');
+        name.textContent = coin.name ?? coin.id ?? '—';
+        const symbol = document.createElement('div');
+        symbol.className = 'note mono';
+        symbol.textContent = coin.symbol ?? '';
+        name.appendChild(symbol);
+
+        const price = document.createElement('td');
+        price.className = 'mono';
+        price.textContent = usd(coin.price);
+
+        const change = document.createElement('td');
+        change.className = 'mono';
+        if (typeof coin.change24h === 'number') {
+          change.textContent = `${coin.change24h > 0 ? '+' : ''}${coin.change24h.toFixed(2)}%`;
+          if (coin.change24h < 0) change.classList.add('no');
+        } else {
+          change.textContent = '—';
+        }
+
+        const source = document.createElement('td');
+        source.className = 'mono';
+        const link = document.createElement('a');
+        const slug = BLOCKCHAIR_CHAINS.get(String(coin.symbol ?? '').toUpperCase());
+        if (slug) {
+          link.href = 'https://blockchair.com/' + slug;
+          link.textContent = 'Blockchair';
+        } else {
+          link.href = 'https://www.coingecko.com/en/coins/' + encodeURIComponent(String(coin.id ?? ''));
+          link.textContent = 'Market';
+        }
+        link.target = '_blank';
+        link.rel = 'noopener';
+        source.appendChild(link);
+        tr.append(rank, name, price, change, source);
+        return tr;
+      }
+
+      const MARKETS_PER_PAGE = 50;
+      let marketsUi = null;
+      const marketsState = {
+        coins: [],
+        query: '',
+        page: 1,
+        stats: new Map(),
+        chains: 0,
+        source: 'market API',
+        when: '—',
+      };
+
+      /** Case-insensitive match on a coin's name, symbol, or CoinGecko id. */
+      function filterMarkets(coins, query) {
+        const needle = String(query ?? '').trim().toLowerCase();
+        if (needle === '') return coins;
+        return coins.filter((coin) => {
+          const symbol = String(coin?.symbol ?? '').toLowerCase();
+          const name = String(coin?.name ?? '').toLowerCase();
+          const id = String(coin?.id ?? '').toLowerCase();
+          return symbol.includes(needle) || name.includes(needle) || id.includes(needle);
+        });
+      }
+
+      /** Clamp the requested page into range and slice it out of the list. */
+      function marketPage(coins, page, perPage) {
+        const pages = Math.max(1, Math.ceil(coins.length / perPage));
+        const current = Math.min(Math.max(1, Math.trunc(page) || 1), pages);
+        const from = (current - 1) * perPage;
+        return { pages, page: current, from, rows: coins.slice(from, from + perPage) };
+      }
+
+      /**
+       * Index the host's Blockchair readings by chain slug and by symbol, so a
+       * market row can borrow the blocks and mempool of the chain it belongs to.
+       * A chain that answered with an error, or with no numbers at all, is left
+       * out instead of being drawn as zero.
+       */
+      function marketStatsIndex(coins) {
+        const index = new Map();
+        let chains = 0;
+        for (const coin of Array.isArray(coins) ? coins : []) {
+          const blocks = Number.isFinite(coin?.blocks) ? coin.blocks : null;
+          const mempool = Number.isFinite(coin?.mempool) ? coin.mempool : null;
+          if (blocks === null && mempool === null) continue;
+          chains += 1;
+          const entry = {
+            chain: coin?.chain ?? '',
+            blocks,
+            mempool,
+            ageSeconds: Number.isFinite(coin?.age_seconds) ? coin.age_seconds : null,
+            error: typeof coin?.error === 'string' ? coin.error : null,
+          };
+          const slug = String(coin?.chain ?? '').toLowerCase();
+          const symbol = String(coin?.symbol ?? '').toUpperCase();
+          if (slug !== '') index.set('chain:' + slug, entry);
+          if (symbol !== '') index.set('symbol:' + symbol, entry);
+        }
+        return { index, chains };
+      }
+
+      /** The reading for a market row: chain slug first, symbol as its fallback. */
+      function statsFor(index, market) {
+        const id = String(market?.id ?? '').toLowerCase();
+        const symbol = String(market?.symbol ?? '').toUpperCase();
+        return index.get('chain:' + id) ?? index.get('symbol:' + symbol) ?? null;
+      }
+
+      /** One numeric cell, dashed when the chain has nothing to show. */
+      function statCell(stats, key) {
+        const td = document.createElement('td');
+        td.className = 'mono';
+        const value = stats === null ? null : stats[key];
+        td.textContent = Number.isFinite(value) ? Number(value).toLocaleString('en-US') : '—';
+        if (stats !== null) {
+          const notes = [];
+          if (Number.isFinite(stats.ageSeconds)) {
+            notes.push('read ' + Math.max(0, Math.round(stats.ageSeconds / 60)) + ' min ago');
+          }
+          if (typeof stats.error === 'string' && stats.error !== '') notes.push(stats.error);
+          if (notes.length > 0) td.title = notes.join(' · ');
+        }
+        return td;
+      }
+
+      const BUTTON_STYLE =
+        'padding:8px 12px; font:inherit; color:inherit; background:var(--panel); border:1px solid var(--line); border-radius:10px; cursor:pointer';
+
+      /** Build the search box and pager once, directly above the table. */
+      function mountMarketControls() {
+        if (marketsUi !== null) return marketsUi;
+
+        const table = $('markets-table');
+        const bar = document.createElement('div');
+        bar.style.cssText =
+          'display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0 0 10px';
+
+        const search = document.createElement('input');
+        search.type = 'search';
+        search.placeholder = 'Search coins by name, symbol, or id';
+        search.setAttribute('aria-label', 'Search coins');
+        search.style.cssText =
+          'flex:1 1 240px; min-width:180px; padding:8px 10px; font:inherit; color:inherit; background:var(--panel); border:1px solid var(--line); border-radius:10px';
+
+        const prev = document.createElement('button');
+        prev.type = 'button';
+        prev.textContent = '← Prev';
+        prev.style.cssText = BUTTON_STYLE;
+
+        const next = document.createElement('button');
+        next.type = 'button';
+        next.textContent = 'Next →';
+        next.style.cssText = BUTTON_STYLE;
+
+        const label = document.createElement('span');
+        label.className = 'note';
+
+        search.addEventListener('input', () => {
+          marketsState.query = search.value;
+          marketsState.page = 1;
+          renderMarkets();
+        });
+        prev.addEventListener('click', () => {
+          marketsState.page -= 1;
+          renderMarkets();
+        });
+        next.addEventListener('click', () => {
+          marketsState.page += 1;
+          renderMarkets();
+        });
+
+        bar.append(search, prev, label, next);
+        table.parentNode.insertBefore(bar, table);
+        marketsUi = { search, prev, next, label };
+        return marketsUi;
+      }
+
+      /** Draw the current page of the filtered list, its stats, and the pager. */
+      function renderMarkets() {
+        const body = $('markets-table').querySelector('tbody');
+        const status = $('markets-status');
+        const ui = mountMarketControls();
+
+        const matches = filterMarkets(marketsState.coins, marketsState.query);
+        const view = marketPage(matches, marketsState.page, MARKETS_PER_PAGE);
+        marketsState.page = view.page;
+
+        if (view.rows.length === 0) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 7;
+          td.className = 'note';
+          td.textContent =
+            marketsState.coins.length === 0 ? 'no coins returned' : 'no coins match that search';
+          tr.appendChild(td);
+          body.replaceChildren(tr);
+        } else {
+          body.replaceChildren(
+            ...view.rows.map((coin) => {
+              const tr = marketRow(coin);
+              const stats = statsFor(marketsState.stats, coin);
+              const source = tr.lastElementChild;
+              tr.insertBefore(statCell(stats, 'blocks'), source);
+              tr.insertBefore(statCell(stats, 'mempool'), source);
+              return tr;
+            }),
+          );
+        }
+
+        const filtered = String(marketsState.query ?? '').trim() !== '';
+        const shown =
+          view.rows.length === 0 ? '0' : view.from + 1 + '–' + (view.from + view.rows.length);
+        const scope = filtered
+          ? shown + ' of ' + matches.length + ' matches (' + marketsState.coins.length + ' loaded)'
+          : shown + ' of ' + marketsState.coins.length;
+        const chains =
+          marketsState.chains > 0
+            ? marketsState.chains + ' Blockchair chains'
+            : 'no Blockchair stats';
+        status.textContent =
+          scope + ' · ' + chains + ' · ' + marketsState.source + ' · ' + marketsState.when;
+
+        labelPage(ui, view);
+      }
+
+      function labelPage(ui, view) {
+        ui.label.textContent = 'page ' + view.page + '/' + view.pages;
+        ui.prev.disabled = view.page <= 1;
+        ui.next.disabled = view.page >= view.pages;
+        ui.prev.style.opacity = ui.prev.disabled ? '0.45' : '1';
+        ui.next.style.opacity = ui.next.disabled ? '0.45' : '1';
+        ui.prev.style.cursor = ui.prev.disabled ? 'default' : 'pointer';
+        ui.next.style.cursor = ui.next.disabled ? 'default' : 'pointer';
+      }
+
+      async function loadMarkets() {
+        const body = $('markets-table').querySelector('tbody');
+        const status = $('markets-status');
+        try {
+          const [response, coinsPayload] = await Promise.all([
+            fetch('/api/markets', { headers: { Accept: 'application/json' } }),
+            fetch('/api/web9999/coins', { headers: { Accept: 'application/json' } })
+              .then((answer) => (answer.ok ? answer.json() : null))
+              .catch(() => null),
+          ]);
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.error || 'HTTP ' + response.status);
+          }
+
+          marketsState.coins = Array.isArray(payload.coins) ? payload.coins : [];
+          marketsState.source = payload.source ?? 'market API';
+          marketsState.when =
+            typeof payload.ts === 'number' ? new Date(payload.ts * 1000).toLocaleTimeString() : '—';
+          const readings = marketStatsIndex(
+            Array.isArray(coinsPayload?.coins) ? coinsPayload.coins : [],
+          );
+          marketsState.stats = readings.index;
+          marketsState.chains = readings.chains;
+          marketsState.page = 1;
+          renderMarkets();
+        } catch (error) {
+          body.replaceChildren();
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 7;
+          td.className = 'no';
+          td.textContent = 'the market list did not answer: ' + (error?.message ?? error);
+          tr.appendChild(td);
+          body.appendChild(tr);
+          status.textContent = 'unavailable';
+        }
+      }
+
+      /* ---------------------------------------------------------------- wallet */
+
+      // The same AppKit setup the app and the exchange page use, in its
+      // framework-free form. Version pinned on all three modules: the Reown
+      // packages must agree or the client loses methods at run time.
+      const WC_PROJECT_ID = 'd77ed816d381dfbae02f9e556f5cadbb';
+      const APPKIT_MODULE = 'https://esm.sh/@reown/appkit@1.8.24';
+      const APPKIT_NETWORKS = 'https://esm.sh/@reown/appkit@1.8.24/networks';
+      const APPKIT_ETHERS = 'https://esm.sh/@reown/appkit-adapter-ethers@1.8.24';
+
+      let appKitPromise = null;
+
+      function startAppKit() {
+        return (async () => {
+          const [core, networks, adapters] = await Promise.all([
+            import(APPKIT_MODULE),
+            import(APPKIT_NETWORKS),
+            import(APPKIT_ETHERS),
+          ]);
+          const client = core.createAppKit({
+            adapters: [new adapters.EthersAdapter()],
+            networks: [networks.polygon],
+            defaultNetwork: networks.polygon,
+            projectId: WC_PROJECT_ID,
+            metadata: {
+              name: 'web9999',
+              description: 'Chain and database view for this host',
+              // Domain-derived so the same page is correct on every name that
+              // serves it, rather than only on the one written here.
+              url: `${location.origin}${location.pathname}`,
+              icons: [`${location.origin}/scan/`],
+            },
+            features: { analytics: false },
+          });
+
+          client.subscribeAccount(async (state) => {
+            if (!state?.isConnected || !state.address) {
+              $('wallet-address').textContent = 'no wallet connected';
+              $('wallet-status').textContent = 'Connect to read a balance.';
+              return;
+            }
+            $('wallet-address').textContent = state.address;
+            $('wallet-status').textContent = 'reading the balance…';
+            try {
+              const provider = client.getWalletProvider();
+              const hex = await provider.request({
+                method: 'eth_getBalance',
+                params: [state.address, 'latest'],
+              });
+              const pol = Number(BigInt(hex)) / 1e18;
+              $('wallet-status').textContent = `${pol.toFixed(5)} POL on chain 137`;
+            } catch (error) {
+              $('wallet-status').textContent = `balance unavailable: ${error?.message ?? error}`;
+            }
+          });
+
+          return client;
+        })();
+      }
+
+      function loadAppKit() {
+        if (appKitPromise === null) {
+          appKitPromise = startAppKit().catch((error) => {
+            appKitPromise = null;
+            $('wallet-status').textContent = `the wallet chooser could not load: ${error?.message ?? error}`;
+            throw error;
+          });
+        }
+        return appKitPromise;
+      }
+
+      // <appkit-button> renders nothing until a client exists, so the client has to
+      // come up on its own. Idle keeps it off the critical path; a first pointer or
+      // focus on the wallet area starts it immediately, since that is intent.
+      const warm = () => { loadAppKit().catch(() => {}); };
+      // Nothing is fetched until the wallet is used. Warming AppKit on idle pulled
+      // ~1,000 esm.sh module requests on every page load — measured, that is ~98%
+      // of this page's startup traffic — for a wallet most visitors never open.
+      // A pointer or focus on the wallet area is intent enough.
+      document.querySelector('.wallet').addEventListener('pointerdown', warm, { once: true });
+      document.querySelector('.wallet').addEventListener('focusin', warm, { once: true });
+      $('wallet-connect').addEventListener('click', () => {
+        $('wallet-status').textContent = 'loading the wallet chooser…';
+        loadAppKit()
+          .then((client) => {
+            $('wallet-connect').hidden = true;
+            client.open();
+          })
+          .catch(() => { $('wallet-status').textContent = 'the wallet chooser did not load'; });
+      });
+
+      loadStatus();
+      loadChains();
+      loadMonero();
+      loadCoinsDb();
+      loadMarkets();
+    </script>
+  </body>
+</html>

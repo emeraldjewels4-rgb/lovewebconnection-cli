@@ -1,0 +1,68 @@
+{
+  "name": "lovewebconnection",
+  "version": "0.2.0",
+  "description": "lwc — read-only EVM chain connection kit: chain health, balances, scans, view calls, and watch-mode reliability checks",
+  "type": "module",
+  "bin": {
+    "lwc": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "examples",
+    "README.md",
+    ".env.example"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "keywords": [
+    "evm",
+    "ethereum",
+    "rpc",
+    "blockchain",
+    "viem",
+    "read-only",
+    "xlayer",
+    "base",
+    "cli"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/chain.test.ts src/balances.test.ts src/contract.test.ts src/watch.test.ts src/call.test.ts src/metrics.test.ts src/scan.test.ts src/compare.test.ts src/compare-history.test.ts src/metadata-cache.test.ts src/cache.test.ts src/tokenfile.test.ts src/views.test.ts src/signatures.test.ts src/sessions.test.ts src/history.test.ts src/plot.test.ts src/prices.test.ts src/rotate.test.ts src/webhook.test.ts src/alert-queue.test.ts src/alert-store.test.ts src/market.test.ts src/market-server.test.ts",
+    "chain": "node src/cli.ts",
+    "chain:json": "node src/cli.ts --json",
+    "balances": "node src/cli.ts balances",
+    "example": "node src/cli.ts example",
+    "watch": "node src/cli.ts watch",
+    "call": "node src/cli.ts call",
+    "tokens": "node src/cli.ts tokens",
+    "views": "node src/cli.ts views",
+    "signatures": "node src/cli.ts signatures",
+    "sessions": "node src/cli.ts sessions",
+    "history": "node src/cli.ts history",
+    "plot": "node src/cli.ts plot",
+    "scan": "node src/cli.ts scan",
+    "cache": "node src/cli.ts cache",
+    "compare": "node src/cli.ts compare",
+    "compare-history": "node src/cli.ts compare-history",
+    "market": "node src/cli.ts market",
+    "migrate": "node scripts/migrate.mjs"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "typescript": "^5.6.0"
+  }
+}

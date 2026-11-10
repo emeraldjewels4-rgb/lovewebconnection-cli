@@ -1,0 +1,54 @@
+name: Tests
+
+# The test suite, separate from Migrations because that workflow only runs when
+# migration, SQL or runner files change — the suite needs to run for every push.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: npm test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install from the lockfile
+        run: npm ci --no-audit --no-fund
+
+      # `node --test` strips types without checking them, so a type error would
+      # otherwise pass the suite and only surface at build time.
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Typecheck covers the dev tsconfig; this compiles tsconfig.build.json and
+      # emits dist/, so a broken emit or a misconfigured outDir fails here. The
+      # files asserted below are the entry points package.json declares.
+      - name: Build
+        run: |
+          set -euo pipefail
+          npm run build
+          test -f dist/index.js
+          test -f dist/cli.js
+          test -f dist/index.d.ts
+
+      - name: Run the test suite
+        run: npm test

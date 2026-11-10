@@ -1,0 +1,175 @@
+name: Migrations
+
+# Applies migrations/ to a throwaway TimescaleDB, checks the aggregate against
+# seeded rows, rolls back, and rebuilds — so a migration that only works once,
+# or a down-migration that does not actually remove the view, fails the build.
+
+on:
+  push:
+    paths:
+      - "migrations/**"
+      - "db/**"
+      - "scripts/migrate.mjs"
+      - "package.json"
+      - ".github/workflows/migrations.yml"
+  pull_request:
+    paths:
+      - "migrations/**"
+      - "db/**"
+      - "scripts/migrate.mjs"
+      - "package.json"
+      - ".github/workflows/migrations.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migrations-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  up-and-down:
+    name: apply, verify, roll back
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      timescaledb:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lwc_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d lwc_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/lwc_ci
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # The runner and the checks use only Node built-ins and psql, so nothing
+      # is installed from npm and no lockfile is required.
+      - name: Make sure psql and pg_isready are available
+        run: |
+          if ! command -v psql >/dev/null 2>&1 || ! command -v pg_isready >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+          psql --version
+          pg_isready --version
+
+      - name: Wait for TimescaleDB
+        run: |
+          if ! command -v pg_isready >/dev/null 2>&1; then
+            echo "pg_isready is missing; install postgresql-client" >&2
+            exit 1
+          fi
+          for attempt in $(seq 1 60); do
+            if pg_isready -h 127.0.0.1 -p 5432 -U postgres -d lwc_ci; then
+              echo "database ready after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "database never became ready" >&2
+          exit 1
+
+      # The migration owns the aggregate, not the table: db/setup_conditions.sql
+      # creates this too, and migrations are written to assume it already exists.
+      - name: Create the source hypertable
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE conditions (
+            time        timestamptz      NOT NULL,
+            device      text             NOT NULL,
+            temperature double precision NOT NULL
+          );
+          SELECT create_hypertable('conditions', 'time');
+          SQL
+
+      - name: Apply, verify, tear down and rebuild
+        run: |
+          set -euo pipefail
+
+          npm run migrate -- --list
+
+          # 1. Apply.
+          npm run migrate -- up | tee up.log
+          grep -qE "applied +0001_conditions_summary_daily" up.log
+          test "$(psql "$DATABASE_URL" -tAc "SELECT name FROM schema_migrations")" \
+            = "0001_conditions_summary_daily"
+          test "$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('conditions_summary_daily')")" \
+            = "conditions_summary_daily"
+
+          # 2. A second run must change nothing.
+          npm run migrate -- up | tee up-again.log
+          grep -q "nothing to apply" up-again.log
+
+          # 3. Seed and verify: db/seed_conditions.sql raises on any drift, and
+          #    ON_ERROR_STOP turns that into a failed step.
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seed_conditions.sql
+
+          # 4. Status agrees with the ledger.
+          npm run migrate -- status | tee status.log
+          grep -qE "applied +0001_conditions_summary_daily" status.log
+
+          # 5. Roll back, and prove the view and the ledger entry are gone.
+          npm run migrate -- down | tee down.log
+          grep -qE "reverted +0001_conditions_summary_daily" down.log
+          test "$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('conditions_summary_daily') IS NULL")" = "t"
+          test "$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM schema_migrations")" = "0"
+
+          # 6. Nothing left to roll back.
+          npm run migrate -- down | tee down-again.log
+          grep -q "nothing to roll back" down-again.log
+
+          # 7. Rebuild, then tear down: the seeded rows, the aggregate and the
+          #    ledger entry all go, so the cycle can start over. The row count is
+          #    read first so the teardown's own notice has to match the seed.
+          npm run migrate -- up
+          seeded=$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM conditions
+            WHERE device IN ('sensor-a', 'sensor-b', 'sensor-c')
+              AND time >= TIMESTAMPTZ '2026-01-01 00:00:00+00'
+              AND time <  TIMESTAMPTZ '2026-01-03 00:00:00+00'")
+          test "$seeded" -gt 0
+          # 2>&1 because psql reports the teardown's progress as NOTICEs on stderr.
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/teardown_conditions.sql 2>&1 | tee teardown.log
+          grep -qE "removed ${seeded} seeded row" teardown.log
+          grep -qE "forgot 1 migration ledger row" teardown.log
+          test "$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('conditions_summary_daily') IS NULL")" = "t"
+          test "$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM conditions WHERE device IN ('sensor-a', 'sensor-b', 'sensor-c')")" = "0"
+          test "$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM schema_migrations")" = "0"
+
+          # 8. Running the teardown again changes nothing.
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/teardown_conditions.sql 2>&1 | tee teardown-again.log
+          grep -q "removed 0 seeded row" teardown-again.log
+          grep -q "forgot 0 migration ledger row" teardown-again.log
+
+          # 9. The migration is pending again, and the standalone setup plus the
+          #    seed rebuild everything — the seed's own assertions verify it.
+          npm run migrate -- status | tee status-after-teardown.log
+          grep -qE "pending +0001_conditions_summary_daily" status-after-teardown.log
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/setup_conditions.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seed_conditions.sql
+
+          # 10. It still applies on top of the standalone setup, and reverts.
+          npm run migrate -- up
+          npm run migrate -- down --all
+          test "$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('conditions_summary_daily') IS NULL")" = "t"
+
+          # 11. The optional full teardown takes the source table with it.
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v drop_table=1 -f db/teardown_conditions.sql 2>&1 | tee teardown-all.log
+          test "$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('conditions') IS NULL")" = "t"
