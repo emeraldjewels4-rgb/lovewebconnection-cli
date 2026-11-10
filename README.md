@@ -122,11 +122,19 @@ connectivity check in CI:
 lwc presets
 lwc presets --json            # machine-readable; exits 1 on any failure
 lwc presets --timeout 5000    # per-endpoint budget in ms (250-120000)
+lwc presets --history .lwc-history/presets.jsonl   # append this run
+lwc presets-history .lwc-history/presets.jsonl     # trend across runs
 ```
 
-The scheduled **Preset health** workflow publishes this table to the run summary
-and annotates every failover, so a backup serving a run stays visible in the run
-history instead of hiding in a JSON field.
+`--history` appends one JSON line per run, and `presets-history` reads them back
+into per-preset uptime, failovers, p50/max latency, and the last failure, so a
+provider that fails one run in ten is visible instead of averaged away by a
+single healthy probe.
+
+The scheduled **Preset health** workflow publishes this table to the run summary,
+annotates every failover, and restores its history file from the Actions cache so
+the trend builds up across runs. Cache entries expire after a week of no use,
+which shortens the trend window but never the check itself.
 
 `--chain` is global, so one shell can work across networks without editing
 `.env`:

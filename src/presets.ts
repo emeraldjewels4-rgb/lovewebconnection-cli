@@ -202,9 +202,16 @@ function parseTimeout(raw: string): number {
   return timeoutMs;
 }
 
-/** `lwc presets` takes --json and --timeout; --chain is meaningless here. */
-export function parsePresetsArgs(argv: string[]): { timeoutMs: number } {
+/**
+ * `lwc presets` takes --json, --timeout, and --history; --chain is meaningless
+ * here, since the command probes every preset.
+ */
+export function parsePresetsArgs(argv: string[]): {
+  timeoutMs: number;
+  historyPath: string | null;
+} {
   let timeoutMs = DEFAULT_PROBE_TIMEOUT_MS;
+  let historyPath: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
@@ -220,8 +227,23 @@ export function parsePresetsArgs(argv: string[]): { timeoutMs: number } {
       timeoutMs = parseTimeout(arg.slice("--timeout=".length));
       continue;
     }
+    if (arg === "--history") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new PresetsArgError("--history requires a file path.");
+      }
+      historyPath = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--history=")) {
+      const value = arg.slice("--history=".length);
+      if (!value) throw new PresetsArgError("--history requires a file path.");
+      historyPath = value;
+      continue;
+    }
     throw new PresetsArgError(`unexpected argument "${arg}".`);
   }
 
-  return { timeoutMs };
+  return { timeoutMs, historyPath };
 }

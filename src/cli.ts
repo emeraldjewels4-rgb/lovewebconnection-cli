@@ -171,6 +171,15 @@ import {
   probePresets,
   toPresetsJson,
 } from "./presets.ts";
+import {
+  PresetsHistoryArgError,
+  appendPresetHistory,
+  formatPresetHistory,
+  parsePresetHistoryArgs,
+  readPresetHistory,
+  summarizePresetHistory,
+  toPresetHistoryJson,
+} from "./presets-history.ts";
 
 const argv = process.argv.slice(2);
 const command = argv[0] ?? "";
@@ -190,6 +199,7 @@ const isSignatures = command === "signatures";
 const isCache = command === "cache";
 const isMarket = command === "market";
 const isPresets = command === "presets";
+const isPresetHistory = command === "presets-history";
 const isHealth = command === "" || command === "chain" || command.startsWith("-");
 
 if (
@@ -209,11 +219,12 @@ if (
   !isCache &&
   !isMarket &&
   !isPresets &&
+  !isPresetHistory &&
   !isPlot
 ) {
   console.error(`unknown command: ${command}`);
   console.error(
-    "usage: lwc [chain|presets|balances|tokens|views|signatures|example|scan|compare|compare-history|watch|call|sessions|history|plot|cache|market] [--chain <name|id>] [--json]",
+    "usage: lwc [chain|presets|presets-history|balances|tokens|views|signatures|example|scan|compare|compare-history|watch|call|sessions|history|plot|cache|market] [--chain <name|id>] [--json]",
   );
   process.exit(1);
 }
@@ -250,17 +261,57 @@ const asJson = flags.includes("--json");
 // Probes the built-in presets themselves, so it needs no configuration.
 if (isPresets) {
   try {
-    const { timeoutMs } = parsePresetsArgs(flags);
+    const { timeoutMs, historyPath } = parsePresetsArgs(flags);
     const report = await probePresets({ timeoutMs });
     console.log(
       asJson ? JSON.stringify(toPresetsJson(report), null, 2) : formatPresets(report),
     );
+    // Recorded after the report is printed: a read-only history file must not
+    // hide the probe's result or change its exit code.
+    if (historyPath !== null) {
+      try {
+        appendPresetHistory(historyPath, report);
+      } catch (error) {
+        console.error(
+          `warning: could not record history at ${historyPath}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     // Non-zero when an endpoint is unhealthy, so scripts and CI can gate on it.
     process.exit(report.failed === 0 ? 0 : 1);
   } catch (error) {
     if (error instanceof PresetsArgError) {
       console.error(`usage error: ${error.message}`);
       console.error("  example: lwc presets --timeout 5000");
+    } else {
+      console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    process.exit(1);
+  }
+}
+
+// Local-only: reads the runs recorded by `lwc presets --history`.
+if (isPresetHistory) {
+  let historyPath = "";
+  try {
+    const args = parsePresetHistoryArgs(flags);
+    historyPath = args.path;
+    const summary = summarizePresetHistory(readPresetHistory(historyPath));
+    console.log(
+      asJson
+        ? JSON.stringify(toPresetHistoryJson(summary), null, 2)
+        : formatPresetHistory(summary),
+    );
+    process.exit(0);
+  } catch (error) {
+    if (error instanceof PresetsHistoryArgError) {
+      console.error(`usage error: ${error.message}`);
+      console.error("  example: lwc presets-history .lwc-history/presets.jsonl --json");
+    } else if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      console.error(`usage error: no history at ${historyPath || "(no path)"}.`);
+      console.error(
+        "  record runs first: lwc presets --history .lwc-history/presets.jsonl",
+      );
     } else {
       console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
     }

@@ -228,13 +228,21 @@ test("JSON keeps bigints as strings and failures as nulls", () => {
   assert.doesNotThrow(() => JSON.stringify(json));
 });
 
-test("parses --timeout in both forms and rejects bad values", () => {
+test("parses --timeout and --history, and rejects bad values", () => {
   assert.equal(parsePresetsArgs([]).timeoutMs, DEFAULT_PROBE_TIMEOUT_MS);
   assert.equal(parsePresetsArgs(["--json"]).timeoutMs, DEFAULT_PROBE_TIMEOUT_MS);
   assert.equal(parsePresetsArgs(["--timeout", "5000"]).timeoutMs, 5000);
   assert.equal(parsePresetsArgs(["--timeout=500"]).timeoutMs, 500);
 
-  for (const argv of [["--timeout"], ["--timeout", "0"], ["--timeout", "abc"], ["--timeout", "999999"], ["--chain", "base"]]) {
+  assert.equal(parsePresetsArgs([]).historyPath, null);
+  assert.equal(parsePresetsArgs(["--history", "h.jsonl"]).historyPath, "h.jsonl");
+  assert.equal(parsePresetsArgs(["--history=h.jsonl"]).historyPath, "h.jsonl");
+  assert.equal(
+    parsePresetsArgs(["--json", "--history", "h.jsonl", "--timeout", "500"]).historyPath,
+    "h.jsonl",
+  );
+
+  for (const argv of [["--timeout"], ["--timeout", "0"], ["--timeout", "abc"], ["--timeout", "999999"], ["--chain", "base"], ["--history"], ["--history="]]) {
     assert.throws(
       () => parsePresetsArgs(argv),
       (error: unknown) => error instanceof PresetsArgError,

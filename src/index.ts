@@ -363,3 +363,19 @@ export type {
 export { escapeAnnotation, summarizePresets } from "./presets-summary.ts";
 
 export type { PresetsSummary } from "./presets-summary.ts";
+
+export {
+  PresetsHistoryArgError,
+  appendPresetHistory,
+  formatPresetHistory,
+  parsePresetHistoryArgs,
+  readPresetHistory,
+  summarizePresetHistory,
+  toPresetHistoryJson,
+} from "./presets-history.ts";
+
+export type {
+  PresetHistoryRecord,
+  PresetHistoryRow,
+  PresetsHistorySummary,
+} from "./presets-history.ts";
