@@ -43,6 +43,32 @@ export const CHAIN_PRESETS: Record<string, ChainPreset> = {
     rpcUrl: "https://mainnet.base.org",
     nativeSymbol: "ETH",
   },
+  ethereum: {
+    chainId: 1,
+    name: "ethereum",
+    rpcUrl: "https://ethereum-rpc.publicnode.com",
+    nativeSymbol: "ETH",
+  },
+  arbitrum: {
+    chainId: 42_161,
+    name: "arbitrum",
+    rpcUrl: "https://arb1.arbitrum.io/rpc",
+    nativeSymbol: "ETH",
+  },
+  optimism: {
+    chainId: 10,
+    name: "optimism",
+    rpcUrl: "https://mainnet.optimism.io",
+    nativeSymbol: "ETH",
+  },
+  polygon: {
+    chainId: 137,
+    name: "polygon",
+    // polygon-rpc.com answers 401 now; this endpoint was probed live.
+    rpcUrl: "https://polygon-bor-rpc.publicnode.com",
+    // POL since the chain renamed its token from MATIC.
+    nativeSymbol: "POL",
+  },
 };
 
 export function chainPresetNames(): string[] {

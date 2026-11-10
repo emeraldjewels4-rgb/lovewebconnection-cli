@@ -80,16 +80,21 @@ never printed, and `chain.preset` names the built-in chain in use (or `null`).
 
 ## Chains
 
-Two chains are built in, so checking them needs no configuration:
+Six chains are built in, so checking them needs no configuration:
 
 | Preset | Chain id | Native | Default RPC |
 | --- | --- | --- | --- |
 | `xlayer` | 196 | OKB | `https://xlayer.drpc.org` |
 | `base` | 8453 | ETH | `https://mainnet.base.org` |
+| `ethereum` | 1 | ETH | `https://ethereum-rpc.publicnode.com` |
+| `arbitrum` | 42161 | ETH | `https://arb1.arbitrum.io/rpc` |
+| `optimism` | 10 | ETH | `https://mainnet.optimism.io` |
+| `polygon` | 137 | POL | `https://polygon-bor-rpc.publicnode.com` |
 
 ```bash
 lwc chain --chain xlayer
 lwc chain --chain base
+lwc chain --chain ethereum    # any preset works the same way
 lwc chain --chain 196        # a preset can also be named by its chain id
 LWC_CHAIN=xlayer npm run chain
 ```

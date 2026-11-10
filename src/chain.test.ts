@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  CHAIN_PRESETS,
   ChainConfigError,
   buildClient,
   connectionWarnings,
@@ -65,6 +66,43 @@ test("resolves built-in chain presets", () => {
   assert.equal(base.rpcUrl, "https://mainnet.base.org");
   assert.equal(base.nativeCurrency.symbol, "ETH");
   assert.equal(base.preset, "base");
+});
+
+test("resolves the extended chain presets", () => {
+  const cases = [
+    ["ethereum", 1, "ETH", "https://ethereum-rpc.publicnode.com"],
+    ["arbitrum", 42_161, "ETH", "https://arb1.arbitrum.io/rpc"],
+    ["optimism", 10, "ETH", "https://mainnet.optimism.io"],
+    ["polygon", 137, "POL", "https://polygon-bor-rpc.publicnode.com"],
+  ] as const;
+
+  for (const [selector, chainId, symbol, rpcUrl] of cases) {
+    const byName = parseChainConfig({}, selector);
+    assert.equal(byName.chainId, chainId, selector);
+    assert.equal(byName.preset, selector);
+    assert.equal(byName.name, selector);
+    assert.equal(byName.nativeCurrency.symbol, symbol, selector);
+    assert.equal(byName.rpcUrl, rpcUrl, selector);
+
+    const byId = parseChainConfig({}, String(chainId));
+    assert.equal(byId.preset, selector, `${chainId} resolves to ${selector}`);
+  }
+});
+
+test("the preset table stays internally consistent", () => {
+  const presets = Object.entries(CHAIN_PRESETS);
+  assert.ok(presets.length >= 6, "the extended presets are registered");
+
+  const ids = new Set(presets.map(([, preset]) => preset.chainId));
+  const names = new Set(presets.map(([, preset]) => preset.name));
+  assert.equal(ids.size, presets.length, "every chain id is unique");
+  assert.equal(names.size, presets.length, "every name is unique");
+
+  for (const [key, preset] of presets) {
+    assert.equal(preset.name, key, `${key} key and name agree`);
+    assert.match(preset.rpcUrl, /^https:\/\//, `${key} uses https`);
+    assert.match(preset.nativeSymbol, /^[A-Z0-9]{2,6}$/, `${key} has a plain symbol`);
+  }
 });
 
 test("accepts a preset chain id as the selector", () => {
@@ -136,11 +174,13 @@ test("keeps supporting fully custom chains", () => {
   assert.equal(byEnv.preset, null);
   assert.equal(byEnv.name, "lwc-1");
 
+  // 999 is deliberately not a preset: preset ids (1, 10, 137, 8453, 42161)
+  // resolve to a preset and are covered above.
   const byId = parseChainConfig({
-    LWC_CHAIN: "42161",
+    LWC_CHAIN: "999",
     LWC_RPC_URL: "https://arb.example.org",
   });
-  assert.equal(byId.chainId, 42_161);
+  assert.equal(byId.chainId, 999);
   assert.equal(byId.preset, null);
   assert.equal(byId.nativeCurrency.symbol, "ETH");
 });
@@ -148,14 +188,14 @@ test("keeps supporting fully custom chains", () => {
 test("rejects an unknown preset, a conflicting chain id, and a presetless rpc", () => {
   expectConfigError(
     () => parseChainConfig({ LWC_CHAIN: "solana" }),
-    /unknown chain "solana".*xlayer, base/s,
+    /unknown chain "solana".*xlayer, base, ethereum, arbitrum, optimism, polygon/s,
   );
   expectConfigError(
     () => parseChainConfig({ LWC_CHAIN: "xlayer", LWC_CHAIN_ID: "8453" }),
     /LWC_CHAIN is xlayer \(196\), but LWC_CHAIN_ID is 8453/,
   );
   expectConfigError(
-    () => parseChainConfig({ LWC_CHAIN: "1" }),
+    () => parseChainConfig({ LWC_CHAIN: "999" }),
     /LWC_RPC_URL is required for a custom chain/,
   );
 });
