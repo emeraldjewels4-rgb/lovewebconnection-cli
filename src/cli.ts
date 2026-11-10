@@ -296,7 +296,10 @@ if (isPresetHistory) {
   try {
     const args = parsePresetHistoryArgs(flags);
     historyPath = args.path;
-    const summary = summarizePresetHistory(readPresetHistory(historyPath));
+    const summary = summarizePresetHistory(readPresetHistory(historyPath), {
+      since: args.since,
+      limit: args.limit,
+    });
     console.log(
       asJson
         ? JSON.stringify(toPresetHistoryJson(summary), null, 2)

@@ -124,12 +124,20 @@ lwc presets --json            # machine-readable; exits 1 on any failure
 lwc presets --timeout 5000    # per-endpoint budget in ms (250-120000)
 lwc presets --history .lwc-history/presets.jsonl   # append this run
 lwc presets-history .lwc-history/presets.jsonl     # trend across runs
+lwc presets-history .lwc-history/presets.jsonl --since 7d    # this week only
+lwc presets-history .lwc-history/presets.jsonl --limit 20    # the newest 20
 ```
 
 `--history` appends one JSON line per run, and `presets-history` reads them back
 into per-preset uptime, failovers, p50/max latency, and the last failure, so a
 provider that fails one run in ten is visible instead of averaged away by a
 single healthy probe.
+
+`--since` takes an ISO timestamp or a span measured back from now (`30m`, `24h`,
+`7d`), and `--limit` keeps the newest N runs after that cutoff, so a recent
+incident reads on its own instead of against the whole file. A narrowed view
+says `runs 2 of 30` and prints the window it applied; `--json` carries
+`totalRuns`, `since` and `limit` so a report can state its own scope.
 
 The scheduled **Preset health** workflow publishes this table to the run summary,
 annotates every failover, and restores its history file from the Actions cache so

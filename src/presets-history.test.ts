@@ -172,18 +172,122 @@ test("formatPresetHistory explains an empty history", () => {
 });
 
 test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
-  assert.deepEqual(parsePresetHistoryArgs(["history.jsonl"]), { path: "history.jsonl" });
+  assert.deepEqual(parsePresetHistoryArgs(["history.jsonl"]), {
+    path: "history.jsonl",
+    since: null,
+    limit: null,
+  });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--json"]), {
     path: "history.jsonl",
+    since: null,
+    limit: null,
   });
 
-  for (const argv of [[], ["a.jsonl", "b.jsonl"], ["--since", "1d"], ["-x"]]) {
+  for (const argv of [[], ["a.jsonl", "b.jsonl"], ["--bogus"], ["-x"]]) {
     assert.throws(
       () => parsePresetHistoryArgs(argv),
       (error: unknown) => error instanceof PresetsHistoryArgError,
       argv.join(" "),
     );
   }
+});
+
+test("parses --since as an ISO time or a span, and --limit as a positive count", () => {
+  const now = Date.parse("2026-11-10T12:00:00Z");
+
+  assert.equal(
+    parsePresetHistoryArgs(["h.jsonl", "--since", "2026-11-09T12:00:00Z"], now).since,
+    Date.parse("2026-11-09T12:00:00Z"),
+  );
+  assert.equal(parsePresetHistoryArgs(["h.jsonl", "--since=24h"], now).since, now - 86_400_000);
+  assert.equal(parsePresetHistoryArgs(["--limit=3", "h.jsonl"], now).limit, 3);
+  assert.deepEqual(parsePresetHistoryArgs(["h.jsonl", "--since", "7d", "--limit", "2"], now), {
+    path: "h.jsonl",
+    since: now - 7 * 86_400_000,
+    limit: 2,
+  });
+
+  for (const argv of [
+    ["h.jsonl", "--since", "soon"],
+    ["h.jsonl", "--since"],
+    ["h.jsonl", "--limit", "0"],
+    ["h.jsonl", "--limit", "two"],
+    ["h.jsonl", "--limit"],
+  ]) {
+    assert.throws(
+      () => parsePresetHistoryArgs(argv, now),
+      (error: unknown) => error instanceof PresetsHistoryArgError,
+      argv.join(" "),
+    );
+  }
+});
+
+test("--since and --limit narrow the summary to the newest runs", () => {
+  const records = [
+    record("2026-11-08T06:00:00.000Z", [endpoint("base", 8453, { latencyMs: 10 })]),
+    record("2026-11-09T06:00:00.000Z", [
+      endpoint("base", 8453, {
+        ok: false,
+        latencyMs: null,
+        blockNumber: null,
+        error: "down",
+      }),
+    ]),
+    record("2026-11-10T06:00:00.000Z", [endpoint("base", 8453, { latencyMs: 30 })]),
+  ];
+
+  const cutoff = Date.parse("2026-11-09T00:00:00Z");
+  const since = summarizePresetHistory(records, { since: cutoff });
+  assert.equal(since.totalRuns, 3);
+  assert.equal(since.runs, 2);
+  assert.equal(since.failedRuns, 1);
+  assert.equal(since.since, cutoff);
+  assert.equal(since.presets[0]?.uptimePct, 50);
+
+  const limited = summarizePresetHistory(records, { limit: 1 });
+  assert.equal(limited.totalRuns, 3);
+  assert.equal(limited.runs, 1);
+  assert.equal(limited.failedRuns, 0);
+  assert.equal(limited.from, "2026-11-10T06:00:00.000Z");
+  assert.equal(limited.limit, 1);
+
+  // --since applies first, then --limit takes the tail of what is left.
+  const both = summarizePresetHistory(records, {
+    since: Date.parse("2026-11-08T12:00:00Z"),
+    limit: 1,
+  });
+  assert.equal(both.runs, 1);
+  assert.equal(both.from, "2026-11-10T06:00:00.000Z");
+
+  const none = summarizePresetHistory(records, { since: Date.parse("2027-01-01T00:00:00Z") });
+  assert.equal(none.runs, 0);
+  assert.equal(none.totalRuns, 3);
+});
+
+test("formatPresetHistory names the window it applied", () => {
+  const text = formatPresetHistory(
+    summarizePresetHistory(
+      [
+        record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+        record("2026-11-11T06:17:00.000Z", [endpoint("base", 8453)]),
+      ],
+      { since: Date.parse("2026-11-09T00:00:00Z"), limit: 5 },
+    ),
+  );
+
+  assert.match(text, /runs {10}1 of 2 \(2026-11-11 06:17 → 2026-11-11 06:17\)/);
+  assert.match(text, /window {8}since 2026-11-09 00:00, last 5 runs/);
+});
+
+test("formatPresetHistory explains an empty window", () => {
+  const text = formatPresetHistory(
+    summarizePresetHistory([record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)])], {
+      since: Date.parse("2026-11-09T00:00:00Z"),
+    }),
+  );
+
+  assert.match(text, /no runs in this window \(1 recorded\)/);
+  assert.match(text, /widen --since or raise --limit/);
 });
 
 test("a recorded run is what the history view reads back", (t) => {
