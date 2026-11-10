@@ -126,6 +126,7 @@ lwc presets --history .lwc-history/presets.jsonl   # append this run
 lwc presets-history .lwc-history/presets.jsonl     # trend across runs
 lwc presets-history .lwc-history/presets.jsonl --since 7d    # this week only
 lwc presets-history .lwc-history/presets.jsonl --limit 20    # the newest 20
+lwc presets-history .lwc-history/presets.jsonl --since 7d --until 1d
 lwc presets-history .lwc-history/presets.jsonl --since 7d --fail-under 99
 ```
 
@@ -138,7 +139,12 @@ single healthy probe.
 `7d`), and `--limit` keeps the newest N runs after that cutoff, so a recent
 incident reads on its own instead of against the whole file. A narrowed view
 says `runs 2 of 30` and prints the window it applied; `--json` carries
-`totalRuns`, `since` and `limit` so a report can state its own scope.
+`totalRuns`, `since`, `until` and `limit` so a report can state its own scope.
+
+`--until` closes the other end with the same syntax, which is what judges a
+finished incident: `--since 7d --until 1d` is the week before yesterday, so the
+runs since the fix do not dilute the ones that failed. A window that ends before
+it starts is rejected rather than silently matching nothing.
 
 `--fail-under <pct>` turns the view into a gate: it exits 1 when any preset's
 uptime inside the window is below the percentage, naming each offender on stderr

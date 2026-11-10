@@ -177,12 +177,14 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl"]), {
     path: "history.jsonl",
     since: null,
+    until: null,
     limit: null,
     failUnder: null,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--json"]), {
     path: "history.jsonl",
     since: null,
+    until: null,
     limit: null,
     failUnder: null,
   });
@@ -208,6 +210,7 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
   assert.deepEqual(parsePresetHistoryArgs(["h.jsonl", "--since", "7d", "--limit", "2"], now), {
     path: "h.jsonl",
     since: now - 7 * 86_400_000,
+    until: null,
     limit: 2,
     failUnder: null,
   });
@@ -218,6 +221,35 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
     ["h.jsonl", "--limit", "0"],
     ["h.jsonl", "--limit", "two"],
     ["h.jsonl", "--limit"],
+  ]) {
+    assert.throws(
+      () => parsePresetHistoryArgs(argv, now),
+      (error: unknown) => error instanceof PresetsHistoryArgError,
+      argv.join(" "),
+    );
+  }
+});
+
+test("parses --until as a closed end, and rejects an inverted window", () => {
+  const now = Date.parse("2026-11-10T12:00:00Z");
+
+  assert.equal(
+    parsePresetHistoryArgs(["h.jsonl", "--until", "2026-11-09T12:00:00Z"], now).until,
+    Date.parse("2026-11-09T12:00:00Z"),
+  );
+  assert.equal(parsePresetHistoryArgs(["h.jsonl", "--until=1d"], now).until, now - 86_400_000);
+  assert.deepEqual(parsePresetHistoryArgs(["h.jsonl", "--since", "2d", "--until", "1d"], now), {
+    path: "h.jsonl",
+    since: now - 2 * 86_400_000,
+    until: now - 86_400_000,
+    limit: null,
+    failUnder: null,
+  });
+
+  for (const argv of [
+    ["h.jsonl", "--until", "soon"],
+    ["h.jsonl", "--until"],
+    ["h.jsonl", "--since", "1d", "--until", "2d"],
   ]) {
     assert.throws(
       () => parsePresetHistoryArgs(argv, now),
@@ -385,6 +417,53 @@ test("--since and --limit narrow the summary to the newest runs", () => {
   assert.equal(none.totalRuns, 3);
 });
 
+test("--until closes the window without dropping older runs", () => {
+  const records = [
+    record("2026-11-08T06:00:00.000Z", [endpoint("base", 8453, { latencyMs: 10 })]),
+    record("2026-11-09T06:00:00.000Z", [endpoint("base", 8453, { latencyMs: 20 })]),
+    record("2026-11-10T06:00:00.000Z", [
+      endpoint("base", 8453, { ok: false, latencyMs: null, blockNumber: null, error: "down" }),
+    ]),
+  ];
+
+  const closed = summarizePresetHistory(records, {
+    since: Date.parse("2026-11-08T00:00:00Z"),
+    until: Date.parse("2026-11-09T12:00:00Z"),
+  });
+  assert.equal(closed.totalRuns, 3);
+  assert.equal(closed.runs, 2);
+  assert.equal(closed.failedRuns, 0);
+  assert.equal(closed.from, "2026-11-08T06:00:00.000Z");
+  assert.equal(closed.to, "2026-11-09T06:00:00.000Z");
+  assert.equal(closed.until, Date.parse("2026-11-09T12:00:00Z"));
+  assert.equal(closed.presets[0]?.uptimePct, 100);
+
+  // Without --since, an --until keeps the whole earlier history.
+  const early = summarizePresetHistory(records, {
+    until: Date.parse("2026-11-08T06:00:00Z"),
+  });
+  assert.equal(early.runs, 1);
+  assert.equal(early.from, "2026-11-08T06:00:00.000Z");
+});
+
+test("formatPresetHistory prints both ends of a closed window", () => {
+  const text = formatPresetHistory(
+    summarizePresetHistory(
+      [
+        record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+        record("2026-11-10T06:17:00.000Z", [endpoint("base", 8453)]),
+      ],
+      {
+        since: Date.parse("2026-11-08T00:00:00Z"),
+        until: Date.parse("2026-11-09T00:00:00Z"),
+      },
+    ),
+  );
+
+  assert.match(text, /runs {10}1 of 2 \(2026-11-08 06:17 → 2026-11-08 06:17\)/);
+  assert.match(text, /window {8}since 2026-11-08 00:00, until 2026-11-09 00:00/);
+});
+
 test("formatPresetHistory names the window it applied", () => {
   const text = formatPresetHistory(
     summarizePresetHistory(
@@ -408,7 +487,7 @@ test("formatPresetHistory explains an empty window", () => {
   );
 
   assert.match(text, /no runs in this window \(1 recorded\)/);
-  assert.match(text, /widen --since or raise --limit/);
+  assert.match(text, /widen the window or raise --limit/);
 });
 
 test("a recorded run is what the history view reads back", (t) => {

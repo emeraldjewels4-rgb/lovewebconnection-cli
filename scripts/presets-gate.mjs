@@ -57,7 +57,11 @@ try {
   process.exit(1);
 }
 
-const summary = summarizePresetHistory(records, { since: args.since, limit: args.limit });
+const summary = summarizePresetHistory(records, {
+  since: args.since,
+  until: args.until,
+  limit: args.limit,
+});
 const gate = summarizePresetGate(summary, args.failUnder);
 write(`${gate.markdown}\n`);
 

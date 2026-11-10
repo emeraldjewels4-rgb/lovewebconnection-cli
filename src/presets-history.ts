@@ -19,11 +19,13 @@ export class PresetsHistoryArgError extends Error {
   }
 }
 
-/** The window `--since` and `--limit` narrow a history file to. */
+/** The window `--since`, `--until` and `--limit` narrow a history file to. */
 export interface PresetsHistorySelection {
   /** Epoch-ms cutoff: keep runs recorded at or after this time. */
   since?: number | null;
-  /** Keep only the newest N runs left after the cutoff. */
+  /** Epoch-ms bound: keep runs recorded at or before this time. */
+  until?: number | null;
+  /** Keep only the newest N runs left inside the window. */
   limit?: number | null;
 }
 
@@ -52,6 +54,8 @@ export interface PresetsHistorySummary {
   to: string | null;
   /** The applied --since cutoff in epoch ms, or null. */
   since: number | null;
+  /** The applied --until bound in epoch ms, or null. */
+  until: number | null;
   /** The applied --limit, or null. */
   limit: number | null;
   healthyRuns: number;
@@ -108,13 +112,18 @@ export function summarizePresetHistory(
 ): PresetsHistorySummary {
   const totalRuns = records.length;
   const since = selection.since ?? null;
+  const until = selection.until ?? null;
   const limit = selection.limit ?? null;
   const sorted = [...records].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-  const afterCutoff =
-    since === null ? sorted : sorted.filter((record) => Date.parse(record.at) >= since);
+  const inRange = sorted.filter((record) => {
+    const at = Date.parse(record.at);
+    if (since !== null && at < since) return false;
+    if (until !== null && at > until) return false;
+    return true;
+  });
   // A limit is only ever used to look at recent runs, so it keeps the tail.
   const ordered =
-    limit === null ? afterCutoff : afterCutoff.slice(Math.max(0, afterCutoff.length - limit));
+    limit === null ? inRange : inRange.slice(Math.max(0, inRange.length - limit));
 
   interface Bucket {
     chainId: number;
@@ -194,6 +203,7 @@ export function summarizePresetHistory(
     from: ordered[0]?.at ?? null,
     to: ordered.at(-1)?.at ?? null,
     since,
+    until,
     limit,
     healthyRuns,
     failedRuns,
@@ -258,6 +268,7 @@ export function summarizePresetGate(
 
   const filter = [
     summary.since === null ? null : `since ${stamp(new Date(summary.since).toISOString())}`,
+    summary.until === null ? null : `until ${stamp(new Date(summary.until).toISOString())}`,
     summary.limit === null ? null : `newest ${summary.limit}`,
   ].filter((part): part is string => part !== null);
   const runs = `${summary.runs} run${summary.runs === 1 ? "" : "s"} (${stamp(summary.from)} → ${stamp(summary.to)})`;
@@ -297,7 +308,7 @@ export function formatPresetHistory(summary: PresetsHistorySummary): string {
       return [
         "lwc — preset health history",
         "",
-        `  no runs in this window (${summary.totalRuns} recorded); widen --since or raise --limit.`,
+        `  no runs in this window (${summary.totalRuns} recorded); widen the window or raise --limit.`,
       ].join("\n");
     }
     return "lwc — preset health history\n\n  no runs recorded yet; record one with `lwc presets --history <file>`.";
@@ -309,6 +320,7 @@ export function formatPresetHistory(summary: PresetsHistorySummary): string {
       : `${summary.runs} of ${summary.totalRuns}`;
   const window = [
     summary.since === null ? null : `since ${stamp(new Date(summary.since).toISOString())}`,
+    summary.until === null ? null : `until ${stamp(new Date(summary.until).toISOString())}`,
     summary.limit === null ? null : `last ${summary.limit} runs`,
   ].filter((part): part is string => part !== null);
 
@@ -361,6 +373,8 @@ export interface PresetsHistoryArgs {
   path: string;
   /** Epoch-ms cutoff from --since, or null for the whole file. */
   since: number | null;
+  /** Epoch-ms bound from --until, or null to keep everything after --since. */
+  until: number | null;
   /** Newest N runs to keep, or null for all of them. */
   limit: number | null;
   /** Exit non-zero below this uptime percentage, or null to only report. */
@@ -369,8 +383,11 @@ export interface PresetsHistoryArgs {
 
 const SINCE_UNITS_MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
 
-/** `--since` takes an ISO timestamp or a span measured back from now, e.g. `24h`. */
-function parseSince(raw: string, now: number): number {
+/**
+ * A window bound: an ISO timestamp, or a span measured back from now (`24h`),
+ * so `--since 7d --until 1d` keeps the week before yesterday.
+ */
+function parseBound(raw: string, now: number, flag: string): number {
   const relative = /^(\d+)([smhd])$/.exec(raw);
   if (relative) {
     const amount = Number(relative[1]);
@@ -381,7 +398,7 @@ function parseSince(raw: string, now: number): number {
   const parsed = Date.parse(raw);
   if (!Number.isFinite(parsed)) {
     throw new PresetsHistoryArgError(
-      `--since must be an ISO timestamp or a span like 24h, got "${raw}".`,
+      `${flag} must be an ISO timestamp or a span like 24h, got "${raw}".`,
     );
   }
   return parsed;
@@ -393,6 +410,7 @@ export function parsePresetHistoryArgs(
 ): PresetsHistoryArgs {
   let path: string | null = null;
   let since: number | null = null;
+  let until: number | null = null;
   let limit: number | null = null;
   let failUnder: number | null = null;
 
@@ -413,7 +431,15 @@ export function parsePresetHistoryArgs(
       if (!value) {
         throw new PresetsHistoryArgError("--since requires a timestamp or a span like 24h.");
       }
-      since = parseSince(value, now);
+      since = parseBound(value, now, "--since");
+    } else if (arg === "--until" || arg.startsWith("--until=")) {
+      const value = arg.startsWith("--until=")
+        ? arg.slice("--until=".length)
+        : readValue("--until");
+      if (!value) {
+        throw new PresetsHistoryArgError("--until requires a timestamp or a span like 24h.");
+      }
+      until = parseBound(value, now, "--until");
     } else if (arg === "--limit" || arg.startsWith("--limit=")) {
       const value = arg.startsWith("--limit=")
         ? arg.slice("--limit=".length)
@@ -445,7 +471,10 @@ export function parsePresetHistoryArgs(
   }
 
   if (path === null) throw new PresetsHistoryArgError("a history file is required.");
-  return { path, since, limit, failUnder };
+  if (since !== null && until !== null && until < since) {
+    throw new PresetsHistoryArgError("--until must not be earlier than --since.");
+  }
+  return { path, since, until, limit, failUnder };
 }
 
 export type { PresetsReport, PresetEndpoint };

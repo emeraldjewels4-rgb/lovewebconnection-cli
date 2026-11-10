@@ -299,6 +299,7 @@ if (isPresetHistory) {
     historyPath = args.path;
     const summary = summarizePresetHistory(readPresetHistory(historyPath), {
       since: args.since,
+      until: args.until,
       limit: args.limit,
     });
     console.log(
