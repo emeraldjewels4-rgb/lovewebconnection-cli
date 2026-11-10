@@ -36,6 +36,9 @@ jobs:
       # The same span immediately before FAIL_WINDOW, so each run publishes
       # this week's uptime beside the week it replaced.
       COMPARE_WINDOW: 14d..7d
+      # The release is the durable copy, not an unbounded one: cap the merged
+      # history at six months, which still leaves month-over-month windows.
+      RETAIN_WINDOW: 180d
 
     steps:
       - name: Check out
@@ -85,6 +88,7 @@ jobs:
           # Restore their union, so a gap in one copy cannot shrink the window
           # the gate judges, then let the probe append this run to it.
           node scripts/presets-history-merge.mjs "$cached" "$cached" "$durable" \
+            --retain "$RETAIN_WINDOW" \
             || echo "::warning::could not merge the cache and the release; gating on the cache as restored"
           rm -f "$durable"
 

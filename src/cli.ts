@@ -317,7 +317,10 @@ if (isPresetHistory) {
         throw error;
       }
     });
-    const merged = extras.length === 0 ? null : mergePresetHistory([records, ...extras]);
+    const merged =
+      extras.length === 0
+        ? null
+        : mergePresetHistory([records, ...extras], { retainMs: args.retain });
     const history = merged === null ? records : merged.records;
 
     // Notes go to stderr so --json on stdout stays one parseable document.
@@ -326,8 +329,12 @@ if (isPresetHistory) {
         merged.duplicates === 0
           ? ""
           : `, ${merged.duplicates} duplicate${merged.duplicates === 1 ? "" : "s"} dropped`;
+      const pruned =
+        merged.pruned === 0
+          ? ""
+          : `, ${merged.pruned} older run${merged.pruned === 1 ? "" : "s"} pruned`;
       console.error(
-        `merged ${history.length} run${history.length === 1 ? "" : "s"} from ${merged.counts.length} file${merged.counts.length === 1 ? "" : "s"}${dropped}`,
+        `merged ${history.length} run${history.length === 1 ? "" : "s"} from ${merged.counts.length} file${merged.counts.length === 1 ? "" : "s"}${dropped}${pruned}`,
       );
     }
     if (args.out !== null) {

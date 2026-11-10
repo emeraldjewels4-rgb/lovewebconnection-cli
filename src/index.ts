@@ -372,6 +372,7 @@ export {
   formatPresetHistoryComparison,
   mergePresetHistory,
   parsePresetHistoryArgs,
+  parseRetentionMs,
   presetHistoryCsv,
   presetHistoryTimelineCsv,
   presetRegressionWarnings,

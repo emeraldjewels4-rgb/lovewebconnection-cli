@@ -132,7 +132,7 @@ lwc presets-history .lwc-history/presets.jsonl --since 7d --timeline ./timeline.
 lwc presets-history .lwc-history/presets.jsonl --since 7d --compare 14d..7d
 lwc presets-history .lwc-history/presets.jsonl --since 30d --compare 60d..30d
 lwc presets-history .lwc-history/presets.jsonl --since 7d --fail-under 99
-lwc presets-history mine.jsonl --merge laptop.jsonl --out combined.jsonl
+lwc presets-history mine.jsonl --merge laptop.jsonl --out combined.jsonl --retain 180d
 ```
 
 `--history` appends one JSON line per run, and `presets-history` reads them back
@@ -186,6 +186,11 @@ run to clear it.
 `--merge <file>` (repeatable) folds other history files into the one positional
 file before anything reads it, and `--out <path>` writes the combined JSONL — so
 a cache copy and a published copy become one record without a separate script.
+`--retain <span>` caps that union at a window measured back from its newest
+run, pruning older runs as it writes — the workflow publishes six months — and
+because the window follows the newest run rather than the clock, a paused
+schedule cannot prune the record it stopped updating. Keep the span longer than
+any comparison window you still want to read.
 The union is deduplicated by the whole run record: two copies of a run collapse,
 while runs recorded at the same instant with different results both stay. Every
 filter applies to the union, so `--since`, `--fail-under`, `--compare` and the
@@ -227,7 +232,8 @@ lwc presets-history mine.jsonl --merge laptop.jsonl --merge server.jsonl \
 ```
 
 The workflow does this through `scripts/presets-history-merge.mjs`, which skips
-a missing release instead of failing the restore. Cache entries expire after a
+a missing release instead of failing the restore and passes `--retain 180d`, so
+the asset holds six months rather than growing without limit. Cache entries expire after a
 week of no use and a paused schedule would lose the trend; the release keeps the
 whole record, which is what makes month-over-month windows possible away from CI:
 

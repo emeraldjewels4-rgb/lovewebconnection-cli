@@ -169,6 +169,8 @@ export interface PresetHistoryMerge {
   duplicates: number;
   /** Runs each input contributed, in the order they were passed. */
   counts: number[];
+  /** Runs dropped by the retention window. */
+  pruned: number;
 }
 
 /**
@@ -192,7 +194,10 @@ function recordKey(value: unknown): string {
  * runs the other may have lost, so restore their union instead of whichever
  * file happens to be longer. Identical runs are kept once, oldest first.
  */
-export function mergePresetHistory(inputs: PresetHistoryRecord[][]): PresetHistoryMerge {
+export function mergePresetHistory(
+  inputs: PresetHistoryRecord[][],
+  options: { retainMs?: number | null } = {},
+): PresetHistoryMerge {
   const seen = new Set<string>();
   const records: PresetHistoryRecord[] = [];
   const counts = inputs.map((input) => input.length);
@@ -208,10 +213,21 @@ export function mergePresetHistory(inputs: PresetHistoryRecord[][]): PresetHisto
 
   records.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 
+  // The release is the durable copy, not an unbounded one. Retention is
+  // measured from the newest run rather than from now, so a paused schedule
+  // cannot prune the very record it stopped updating.
+  const retainMs = options.retainMs ?? null;
+  const newest = records.at(-1);
+  const kept =
+    retainMs === null || newest === undefined
+      ? records
+      : records.filter((record) => Date.parse(record.at) >= Date.parse(newest.at) - retainMs);
+
   return {
-    records,
+    records: kept,
     duplicates: counts.reduce((sum, count) => sum + count, 0) - records.length,
     counts,
+    pruned: records.length - kept.length,
   };
 }
 
@@ -907,6 +923,8 @@ export interface PresetsHistoryArgs {
   merge: string[];
   /** Where --out writes the merged history, or null to only read it. */
   out: string | null;
+  /** Epoch-ms retention window for the merge from --retain, or null to keep everything. */
+  retain: number | null;
 }
 
 const SINCE_UNITS_MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
@@ -946,6 +964,7 @@ export function parsePresetHistoryArgs(
   let compare: PresetsHistoryWindow | null = null;
   const merge: string[] = [];
   let out: string | null = null;
+  let retain: number | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
@@ -1044,6 +1063,11 @@ export function parsePresetHistoryArgs(
         );
       }
       out = value;
+    } else if (arg === "--retain" || arg.startsWith("--retain=")) {
+      const inline = arg.startsWith("--retain=") ? arg.slice("--retain=".length) : null;
+      const value = inline ?? argv[index + 1] ?? "";
+      if (inline === null) index += 1;
+      retain = parseRetentionMs(value);
     } else if (arg.startsWith("-")) {
       throw new PresetsHistoryArgError(`unexpected flag "${arg}".`);
     } else if (path !== null) {
@@ -1065,6 +1089,11 @@ export function parsePresetHistoryArgs(
       "--out writes the combined history, so pass at least one --merge <file>.",
     );
   }
+  if (retain !== null && merge.length === 0) {
+    throw new PresetsHistoryArgError(
+      "--retain bounds the combined history, so pass at least one --merge <file>.",
+    );
+  }
   if (compare !== null) {
     if (csvPath !== null || timelinePath !== null) {
       throw new PresetsHistoryArgError("--compare cannot be combined with --csv or --timeline.");
@@ -1083,7 +1112,19 @@ export function parsePresetHistoryArgs(
       throw new PresetsHistoryArgError("--compare must end at or before --since.");
     }
   }
-  return { path, since, until, limit, failUnder, csvPath, timelinePath, compare, merge, out };
+  return { path, since, until, limit, failUnder, csvPath, timelinePath, compare, merge, out, retain };
+}
+
+/** A retention window as a positive span (`180d`), for --retain and the CI merge. */
+export function parseRetentionMs(raw: string): number {
+  const match = /^([1-9]\d*)([smhd])$/.exec(raw.trim());
+  if (!match) {
+    throw new PresetsHistoryArgError(
+      `--retain must be a positive span like 180d, got "${raw}".`,
+    );
+  }
+  const unit = SINCE_UNITS_MS[match[2] as keyof typeof SINCE_UNITS_MS];
+  return Number(match[1]) * unit;
 }
 
 export type { PresetsReport, PresetEndpoint };

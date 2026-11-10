@@ -243,6 +243,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     compare: null,
     merge: [],
     out: null,
+    retain: null,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--json"]), {
     path: "history.jsonl",
@@ -255,6 +256,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     compare: null,
     merge: [],
     out: null,
+    retain: null,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--csv", "-"]), {
     path: "history.jsonl",
@@ -267,6 +269,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     compare: null,
     merge: [],
     out: null,
+    retain: null,
   });
   assert.equal(parsePresetHistoryArgs(["h.jsonl", "--timeline", "-"]).timelinePath, "-");
 
@@ -278,6 +281,71 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     ["h.jsonl", "--csv"],
     ["h.jsonl", "--timeline"],
     ["h.jsonl", "--csv", "a.csv", "--timeline", "b.csv"],
+  ]) {
+    assert.throws(
+      () => parsePresetHistoryArgs(argv),
+      (error: unknown) => error instanceof PresetsHistoryArgError,
+      argv.join(" "),
+    );
+  }
+});
+
+test("a merge can cap the record at a retention window", () => {
+  const inputs = [
+    [
+      record("2026-05-01T06:17:00.000Z", [endpoint("base", 8453)]),
+      record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+      record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453)]),
+    ],
+  ];
+
+  const capped = mergePresetHistory(inputs, { retainMs: 2 * 86_400_000 });
+  assert.deepEqual(
+    capped.records.map((entry) => entry.at),
+    ["2026-11-08T06:17:00.000Z", "2026-11-09T06:17:00.000Z"],
+  );
+  assert.equal(capped.pruned, 1);
+
+  const whole = mergePresetHistory(inputs);
+  assert.equal(whole.records.length, 3);
+  assert.equal(whole.pruned, 0);
+});
+
+test("retention is measured from the newest run, so an old record survives", () => {
+  // Anchoring to now would erase both runs of a schedule that stopped in 2020.
+  const merge = mergePresetHistory(
+    [
+      [
+        record("2020-01-01T00:00:00.000Z", [endpoint("base", 8453)]),
+        record("2020-01-02T00:00:00.000Z", [endpoint("base", 8453)]),
+      ],
+    ],
+    { retainMs: 86_400_000 },
+  );
+
+  assert.equal(merge.records.length, 2);
+  assert.equal(merge.pruned, 0);
+});
+
+test("parses --retain as a span that bounds the merged history", () => {
+  const args = parsePresetHistoryArgs([
+    "h.jsonl",
+    "--merge",
+    "other.jsonl",
+    "--retain",
+    "180d",
+  ]);
+  assert.equal(args.retain, 180 * 86_400_000);
+  assert.equal(
+    parsePresetHistoryArgs(["h.jsonl", "--merge", "other.jsonl", "--retain=1h"]).retain,
+    3_600_000,
+  );
+
+  for (const argv of [
+    ["h.jsonl", "--retain", "180d"],
+    ["h.jsonl", "--merge", "o.jsonl", "--retain", "180"],
+    ["h.jsonl", "--merge", "o.jsonl", "--retain", "0d"],
+    ["h.jsonl", "--merge", "o.jsonl", "--retain"],
   ]) {
     assert.throws(
       () => parsePresetHistoryArgs(argv),
@@ -354,6 +422,7 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
     compare: null,
     merge: [],
     out: null,
+    retain: null,
   });
 
   for (const argv of [
@@ -390,6 +459,7 @@ test("parses --until as a closed end, and rejects an inverted window", () => {
     compare: null,
     merge: [],
     out: null,
+    retain: null,
   });
 
   for (const argv of [
