@@ -100,6 +100,11 @@ chain` and `lwc presets` retry against the backup and report which one answered
 instead of failing outright. A configured `LWC_RPC_AUTH` disables the failover:
 a credential is only ever sent to the operator it was issued for.
 
+A custom chain, or a private endpoint configured in `.env`, names its own backup
+with `LWC_FALLBACK_RPC_URL`. For a preset it replaces the preset's backup, and it
+follows the same rule as `LWC_RPC_URL`: it describes the chain configured in
+`.env`, so `--chain` switching to another network does not inherit it.
+
 ```bash
 lwc chain --chain xlayer
 lwc chain --chain base
@@ -1586,6 +1591,7 @@ processes still count separately unless they share that file.
 | `LWC_CHAIN` | no | — | Built-in preset: `xlayer` or `base` (`--chain` overrides it) |
 | `LWC_CHAIN_ID` | custom chains | preset's id | Chain id the RPC must report |
 | `LWC_RPC_URL` | custom chains | preset's endpoint | `http(s)` JSON-RPC endpoint |
+| `LWC_FALLBACK_RPC_URL` | no | preset's backup | Second endpoint tried when the primary is unreachable, times out, or answers the wrong chain; unused with `LWC_RPC_AUTH` |
 | `LWC_CHAIN_NAME` | no | preset name, or `lwc-<chainId>` | Label used in output |
 | `LWC_NATIVE_SYMBOL` | no | preset symbol, or `ETH` | Native currency symbol |
 | `LWC_RPC_AUTH` | no | — | `Authorization` header value |

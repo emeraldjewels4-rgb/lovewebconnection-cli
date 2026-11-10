@@ -513,6 +513,94 @@ test("probeWithFallback keeps the original error when there is no backup", async
   );
 });
 
+test("a custom chain can name its own backup endpoint", () => {
+  const config = parseChainConfig({
+    ...validEnv,
+    LWC_RPC_URL: "https://primary.example.org",
+    LWC_FALLBACK_RPC_URL: "https://backup.example.org",
+  });
+
+  assert.equal(config.preset, null);
+  assert.equal(config.rpcUrl, "https://primary.example.org");
+  assert.equal(config.fallbackRpcUrl, "https://backup.example.org");
+});
+
+test("LWC_FALLBACK_RPC_URL replaces a preset's backup", () => {
+  const overridden = parseChainConfig({
+    LWC_CHAIN: "base",
+    LWC_FALLBACK_RPC_URL: "https://my-backup.example.org",
+  });
+  assert.equal(overridden.fallbackRpcUrl, "https://my-backup.example.org");
+
+  // Like LWC_RPC_URL, it belongs to the chain configured in .env: an explicit
+  // --chain for another chain keeps that preset's own backup.
+  const other = parseChainConfig(
+    {
+      LWC_CHAIN_ID: "8453",
+      LWC_FALLBACK_RPC_URL: "https://my-backup.example.org",
+    },
+    "xlayer",
+  );
+  assert.equal(other.chainId, 196);
+  assert.equal(other.fallbackRpcUrl, "https://rpc.xlayer.tech");
+});
+
+test("a backup that repeats the primary is dropped", () => {
+  const same = parseChainConfig({
+    ...validEnv,
+    LWC_FALLBACK_RPC_URL: "https://mainnet.base.org",
+  });
+  assert.equal(same.fallbackRpcUrl, null);
+});
+
+test("rejects a malformed backup endpoint", () => {
+  expectConfigError(
+    () => parseChainConfig({ ...validEnv, LWC_FALLBACK_RPC_URL: "not a url" }),
+    /LWC_FALLBACK_RPC_URL is not a valid URL/,
+  );
+  expectConfigError(
+    () =>
+      parseChainConfig({ ...validEnv, LWC_FALLBACK_RPC_URL: "ws://backup.example.org" }),
+    /LWC_FALLBACK_RPC_URL must use http or https/,
+  );
+});
+
+test("probeWithFallback uses an env-configured backup", async () => {
+  const config = parseChainConfig({
+    LWC_CHAIN_ID: "8453",
+    LWC_RPC_URL: "https://primary.example.org",
+    LWC_FALLBACK_RPC_URL: "https://backup.example.org",
+  });
+  const outcome = await probeWithFallback(
+    (candidate) =>
+      candidate.rpcUrl === config.rpcUrl
+        ? stubClient({ error: "timeout" })
+        : stubClient(),
+    config,
+  );
+
+  assert.equal(outcome.usedFallback, true);
+  assert.equal(outcome.primaryEndpoint, "https://primary.example.org");
+  assert.equal(outcome.config.rpcUrl, "https://backup.example.org");
+});
+
+test("warns about a plaintext backup and about failover being disabled", () => {
+  const plaintext = parseChainConfig({
+    ...validEnv,
+    LWC_FALLBACK_RPC_URL: "http://backup.example.org",
+  });
+  assert.ok(
+    connectionWarnings(plaintext).some((w) =>
+      /LWC_FALLBACK_RPC_URL uses plaintext http/.test(w),
+    ),
+  );
+
+  const pinned = parseChainConfig({ LWC_CHAIN: "base", LWC_RPC_AUTH: "Bearer x" });
+  assert.ok(
+    connectionWarnings(pinned).some((w) => /backup endpoint is not used/.test(w)),
+  );
+});
+
 test("toJsonPayload records the endpoint that answered", () => {
   const config = parseChainConfig({ LWC_CHAIN: "base" });
   const payload = toJsonPayload(

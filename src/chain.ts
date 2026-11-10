@@ -16,7 +16,10 @@ export interface ChainConfig {
   timeoutMs: number;
   /** Name of the built-in preset this config came from, or null for a custom chain. */
   preset: string | null;
-  /** Endpoint to try when rpcUrl cannot answer, or null when there is none. */
+  /**
+   * Endpoint to try when rpcUrl cannot answer. A preset supplies one, and
+   * LWC_FALLBACK_RPC_URL replaces it; null when there is none.
+   */
   fallbackRpcUrl?: string | null;
 }
 
@@ -147,6 +150,20 @@ function requireEnv(env: Record<string, string | undefined>, key: string): strin
   return value;
 }
 
+function validateRpcUrl(raw: string, key: string): void {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(raw);
+  } catch {
+    throw new ChainConfigError(`${key} is not a valid URL: "${raw}".`);
+  }
+  if (endpoint.protocol !== "https:" && endpoint.protocol !== "http:") {
+    throw new ChainConfigError(
+      `${key} must use http or https, got "${endpoint.protocol}".`,
+    );
+  }
+}
+
 function parseChainId(raw: string): number {
   if (!/^\d+$/.test(raw)) {
     throw new ChainConfigError(
@@ -220,17 +237,7 @@ export function parseChainConfig(
         `LWC_CHAIN (${chainPresetNames().join(", ")}).`,
     );
   }
-  let endpoint: URL;
-  try {
-    endpoint = new URL(rpcUrl);
-  } catch {
-    throw new ChainConfigError(`LWC_RPC_URL is not a valid URL: "${rpcUrl}".`);
-  }
-  if (endpoint.protocol !== "https:" && endpoint.protocol !== "http:") {
-    throw new ChainConfigError(
-      `LWC_RPC_URL must use http or https, got "${endpoint.protocol}".`,
-    );
-  }
+  validateRpcUrl(rpcUrl, "LWC_RPC_URL");
 
   const authHeader = env.LWC_RPC_AUTH?.trim() || null;
   if (authHeader && /[\r\n]/.test(authHeader)) {
@@ -262,11 +269,20 @@ export function parseChainConfig(
     preset?.nativeSymbol ||
     "ETH";
 
-  // The backup comes from the preset, so it never points at the endpoint the
-  // user configured (or at whatever the preset's primary already is).
-  const presetFallback = preset?.fallbackRpcUrl ?? null;
+  // The backup is a preset default that LWC_FALLBACK_RPC_URL replaces, so a
+  // custom chain (or a private endpoint in .env) can name its own second URL.
+  // Like LWC_RPC_URL it describes the chain configured in .env, not one chosen
+  // explicitly with --chain, and it never repeats the primary.
+  const envFallback = presetConflictsWithEnv
+    ? null
+    : env.LWC_FALLBACK_RPC_URL?.trim() || null;
+  if (envFallback !== null) validateRpcUrl(envFallback, "LWC_FALLBACK_RPC_URL");
+
+  const fallbackCandidate = envFallback ?? preset?.fallbackRpcUrl ?? null;
   const fallbackRpcUrl =
-    presetFallback !== null && presetFallback !== rpcUrl ? presetFallback : null;
+    fallbackCandidate !== null && fallbackCandidate !== rpcUrl
+      ? fallbackCandidate
+      : null;
 
   return {
     chainId,
@@ -316,17 +332,28 @@ export function publicEndpoint(rpcUrl: string): string {
 /** Non-fatal advisories about the configured endpoint. */
 export function connectionWarnings(config: ChainConfig): string[] {
   const warnings: string[] = [];
-  const endpoint = new URL(config.rpcUrl);
+  const endpoints: Array<[string, string]> = [["LWC_RPC_URL", config.rpcUrl]];
+  if (config.fallbackRpcUrl) {
+    endpoints.push(["LWC_FALLBACK_RPC_URL", config.fallbackRpcUrl]);
+  }
 
-  if (endpoint.protocol === "http:" && !isLoopbackHost(endpoint.hostname)) {
-    warnings.push(
-      `LWC_RPC_URL uses plaintext http to ${endpoint.hostname}; RPC traffic is unencrypted. Use https.`,
-    );
+  for (const [key, url] of endpoints) {
+    const endpoint = new URL(url);
+    if (endpoint.protocol === "http:" && !isLoopbackHost(endpoint.hostname)) {
+      warnings.push(
+        `${key} uses plaintext http to ${endpoint.hostname}; RPC traffic is unencrypted. Use https.`,
+      );
+    }
   }
   if (config.authHeader) {
     warnings.push(
       "LWC_RPC_AUTH is being sent to this endpoint; only use it with an operator you trust.",
     );
+    if (config.fallbackRpcUrl) {
+      warnings.push(
+        "LWC_RPC_AUTH pins this connection to its endpoint, so the backup endpoint is not used.",
+      );
+    }
   }
   return warnings;
 }
