@@ -18,7 +18,7 @@ import {
   presetComparisonMarkdown,
   presetRegressionWarnings,
   providerRegressionWarnings,
-  readPresetHistory,
+  readPresetHistoryFile,
   retentionWindowWarnings,
   summarizePresetGate,
   summarizePresetHistory,
@@ -53,9 +53,9 @@ try {
 
 if (args.failUnder === null) usage("--fail-under is required for the gate.");
 
-let records;
+let file;
 try {
-  records = readPresetHistory(args.path);
+  file = readPresetHistoryFile(args.path);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   write(
@@ -65,6 +65,7 @@ try {
   process.exit(1);
 }
 
+const records = file.records;
 const summary = summarizePresetHistory(records, {
   since: args.since,
   until: args.until,
@@ -83,17 +84,20 @@ const markdown = [
   .join("\n\n");
 write(`${markdown}\n`);
 
-// CI caps the file at RETAIN_WINDOW, so a gate or comparison window that
-// reaches past it is missing runs for a reason that is not provider failure.
+// The file records the retention it was actually written with; RETAIN_WINDOW is
+// the fallback for a file from before that header existed. Either way a gate or
+// comparison window that reaches past it is short for a reason that is not
+// provider failure.
 const retainRaw = process.env.RETAIN_WINDOW ?? "";
-let retainMs = null;
+let envRetain = null;
 if (retainRaw !== "") {
   try {
-    retainMs = parseRetentionMs(retainRaw);
+    envRetain = parseRetentionMs(retainRaw);
   } catch (error) {
     usage(error instanceof Error ? error.message : String(error));
   }
 }
+const retainMs = file.retainMs ?? envRetain;
 for (const warning of retentionWindowWarnings(
   records.at(-1)?.at ?? null,
   retainMs,

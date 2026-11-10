@@ -182,7 +182,8 @@ import {
   presetHistoryCsv,
   presetHistoryTimelineCsv,
   presetsBelowUptime,
-  readPresetHistory,
+  narrowestRetentionMs,
+  readPresetHistoryFile,
   retentionWindowWarnings,
   savePresetHistory,
   savePresetHistoryCsv,
@@ -305,12 +306,13 @@ if (isPresetHistory) {
   try {
     const args = parsePresetHistoryArgs(flags);
     historyPath = args.path;
-    const records = readPresetHistory(historyPath);
+    const primary = readPresetHistoryFile(historyPath);
+    const records = primary.records;
     // --merge folds other copies in before anything reads them, so a window,
     // a gate and an export all judge the same combined record.
     const extras = args.merge.map((path) => {
       try {
-        return readPresetHistory(path);
+        return readPresetHistoryFile(path);
       } catch (error) {
         if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
           throw new PresetsHistoryArgError(`no history at ${path} to merge.`);
@@ -321,8 +323,16 @@ if (isPresetHistory) {
     const merged =
       extras.length === 0
         ? null
-        : mergePresetHistory([records, ...extras], { retainMs: args.retain });
+        : mergePresetHistory(
+            [records, ...extras.map((file) => file.records)],
+            { retainMs: args.retain },
+          );
     const history = merged === null ? records : merged.records;
+    // What the files say they trimmed to, before this invocation adds its own.
+    const declaredRetain = narrowestRetentionMs([
+      primary.retainMs,
+      ...extras.map((file) => file.retainMs),
+    ]);
 
     // Notes go to stderr so --json on stdout stays one parseable document.
     if (merged !== null) {
@@ -338,18 +348,25 @@ if (isPresetHistory) {
         `merged ${history.length} run${history.length === 1 ? "" : "s"} from ${merged.counts.length} file${merged.counts.length === 1 ? "" : "s"}${dropped}${pruned}`,
       );
     }
-    // A window that reaches past the retained history is missing runs because
-    // --retain pruned them; say so instead of letting a comparison read silence.
-    if (merged !== null && merged.pruned > 0) {
-      for (const warning of retentionWindowWarnings(history.at(-1)?.at ?? null, args.retain, [
+    // A file records the retention it was written with, so a later read can
+    // still explain a window it cannot cover; a --retain that just pruned is
+    // the tighter of the two. Without either, missing runs are not our doing.
+    const readRetain = narrowestRetentionMs([
+      declaredRetain,
+      merged !== null && merged.pruned > 0 ? args.retain : null,
+    ]);
+    for (const warning of retentionWindowWarnings(
+      history.at(-1)?.at ?? null,
+      readRetain,
+      [
         { label: "--since", since: args.since },
         { label: "--compare", since: args.compare?.since ?? null },
-      ])) {
-        console.error(`warning: ${warning}`);
-      }
+      ],
+    )) {
+      console.error(`warning: ${warning}`);
     }
     if (args.out !== null) {
-      savePresetHistory(args.out, history);
+      savePresetHistory(args.out, history, { retainMs: args.retain ?? declaredRetain });
       console.error(`wrote ${history.length} runs → ${args.out}`);
     }
 

@@ -11,6 +11,8 @@ import {
   formatPresetHistory,
   formatPresetHistoryComparison,
   mergePresetHistory,
+  narrowestRetentionMs,
+  readPresetHistoryFile,
   retentionWindowWarnings,
   parsePresetHistoryArgs,
   presetHistoryCsv,
@@ -376,6 +378,38 @@ test("a window older than the retained history is explained, not read as silence
   assert.match(warnings[0] ?? "", /--compare starts at 2026-10-01 00:00/);
   assert.match(warnings[0] ?? "", /before the history retention keeps \(2026-11-02 06:17\)/);
   assert.match(warnings[0] ?? "", /pruned by --retain, not failed/);
+});
+
+test("a saved history records its retention for later reads", (t) => {
+  const dir = tempDir(t);
+  const path = `${dir}/retained.jsonl`;
+  const records = [
+    record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453)]),
+  ];
+
+  savePresetHistory(path, records, { retainMs: 180 * 86_400_000 });
+  const retained = readPresetHistoryFile(path);
+  assert.equal(retained.retainMs, 180 * 86_400_000);
+  assert.deepEqual(
+    retained.records.map((entry) => entry.at),
+    ["2026-11-08T06:17:00.000Z", "2026-11-09T06:17:00.000Z"],
+  );
+  // The header is not a run, so the plain reader still sees just the records.
+  assert.equal(readPresetHistory(path).length, 2);
+
+  savePresetHistory(path, records);
+  assert.equal(readPresetHistoryFile(path).retainMs, null);
+  assert.equal(readPresetHistoryFile(path).records.length, 2);
+});
+
+test("a merge keeps the tightest retention its inputs declared", () => {
+  assert.equal(narrowestRetentionMs([null, null]), null);
+  assert.equal(narrowestRetentionMs([180 * 86_400_000, null]), 180 * 86_400_000);
+  assert.equal(
+    narrowestRetentionMs([180 * 86_400_000, 7 * 86_400_000]),
+    7 * 86_400_000,
+  );
 });
 
 test("parses --merge inputs and --out as one combined history", () => {

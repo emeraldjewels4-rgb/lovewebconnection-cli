@@ -13,8 +13,9 @@ import { existsSync } from "node:fs";
 
 import {
   mergePresetHistory,
+  narrowestRetentionMs,
   parseRetentionMs,
-  readPresetHistory,
+  readPresetHistoryFile,
   savePresetHistory,
 } from "../src/presets-history.ts";
 
@@ -54,13 +55,16 @@ if (inputs.length === 0) usage("at least one input history file is required.");
 
 const groups = [];
 const read = [];
+const declared = [];
 for (const path of inputs) {
   if (!existsSync(path)) {
     console.log(`skipped ${path} (missing)`);
     continue;
   }
   try {
-    groups.push(readPresetHistory(path));
+    const file = readPresetHistoryFile(path);
+    groups.push(file.records);
+    declared.push(file.retainMs);
     read.push(path);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -71,8 +75,11 @@ for (const path of inputs) {
 
 const merged = mergePresetHistory(groups, { retainMs });
 // Reading and writing the same path is the normal case: the union replaces the
-// cache file the probe then appends this run to.
-savePresetHistory(output, merged.records);
+// cache file the probe then appends this run to. The written file records the
+// retention it was trimmed to, so later reads know what it no longer holds.
+savePresetHistory(output, merged.records, {
+  retainMs: retainMs ?? narrowestRetentionMs(declared),
+});
 
 const runs = `${merged.records.length} run${merged.records.length === 1 ? "" : "s"}`;
 const files = `${read.length} file${read.length === 1 ? "" : "s"}`;

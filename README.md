@@ -194,7 +194,10 @@ any window you still want to read: when `--since` or `--compare` reaches past
 the retained history, the CLI warns on stderr, and CI turns a `RETAIN_WINDOW`
 shorter than its gate or comparison window into a
 `::warning title=Retention window::` annotation — a pruned run is not a
-provider that went dark.
+provider that went dark. A written history records the span it was trimmed to in
+a leading `lwc_history` header line, so a later read of that file warns even
+without `--retain` on the command line: the file itself says which runs are
+simply gone.
 
 The union is deduplicated by the whole run record: two copies of a run collapse,
 while runs recorded at the same instant with different results both stay. Every
@@ -238,7 +241,8 @@ lwc presets-history mine.jsonl --merge laptop.jsonl --merge server.jsonl \
 
 The workflow does this through `scripts/presets-history-merge.mjs`, which skips
 a missing release instead of failing the restore and passes `--retain 180d`, so
-the asset holds six months rather than growing without limit. Cache entries
+the asset holds six months rather than growing without limit and records that
+window in the file it writes. Cache entries
 expire after a week of no use and a paused schedule would lose the trend; the
 release keeps the whole record, which is what makes month-over-month windows
 possible away from CI:

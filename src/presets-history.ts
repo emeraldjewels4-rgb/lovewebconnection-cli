@@ -139,26 +139,52 @@ export function appendPresetHistory(
   return record;
 }
 
+/** A history file's runs plus the retention it was written with. */
+export interface PresetHistoryFile {
+  records: PresetHistoryRecord[];
+  /** Retention span declared in the file's header, or null when it has none. */
+  retainMs: number | null;
+}
+
 /**
  * Read a history file, oldest first. A truncated or hand-edited line is skipped
- * rather than losing every run that came before it.
+ * rather than losing every run that came before it. The first line may be a
+ * `lwc_history` header recording the retention the file was trimmed to, so a
+ * read that happens later can still explain which runs are simply gone.
  */
-export function readPresetHistory(path: string): PresetHistoryRecord[] {
+export function readPresetHistoryFile(path: string): PresetHistoryFile {
   const records: PresetHistoryRecord[] = [];
+  let retainMs: number | null = null;
 
   for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
     if (line.trim() === "") continue;
     try {
-      const value = JSON.parse(line) as Partial<PresetHistoryRecord>;
-      if (typeof value.at !== "string" || Number.isNaN(Date.parse(value.at))) continue;
-      if (typeof value.total !== "number" || !Array.isArray(value.endpoints)) continue;
-      records.push(value as PresetHistoryRecord);
+      const value = JSON.parse(line) as Record<string, unknown>;
+      if (value !== null && typeof value === "object" && "lwc_history" in value) {
+        const header = value.lwc_history as { retainMs?: unknown } | null;
+        if (typeof header?.retainMs === "number" && header.retainMs > 0) {
+          retainMs = header.retainMs;
+        }
+        continue;
+      }
+      const record = value as Partial<PresetHistoryRecord>;
+      if (typeof record.at !== "string" || Number.isNaN(Date.parse(record.at))) continue;
+      if (typeof record.total !== "number" || !Array.isArray(record.endpoints)) continue;
+      records.push(record as PresetHistoryRecord);
     } catch {
       // Malformed line: keep reading.
     }
   }
 
-  return records.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  return {
+    records: records.sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
+    retainMs,
+  };
+}
+
+/** The runs in a history file, oldest first; its retention header is ignored. */
+export function readPresetHistory(path: string): PresetHistoryRecord[] {
+  return readPresetHistoryFile(path).records;
 }
 
 /** The union of several history files, with what the merge had to drop. */
@@ -259,10 +285,34 @@ export function mergePresetHistory(
   };
 }
 
-/** Write a whole history file, replacing it, and create its directory. */
-export function savePresetHistory(path: string, records: PresetHistoryRecord[]): void {
+/**
+ * The tightest retention declared by the files being combined. A merge cannot
+ * hold runs that one input already pruned, so the union is bounded by the
+ * narrowest window rather than the widest.
+ */
+export function narrowestRetentionMs(values: Array<number | null>): number | null {
+  const known = values.filter((value): value is number => value !== null);
+  return known.length === 0 ? null : Math.min(...known);
+}
+
+/**
+ * Write a whole history file, replacing it, and create its directory. A
+ * retention window is recorded as the header readPresetHistoryFile returns, so
+ * the file itself says what it does not keep.
+ */
+export function savePresetHistory(
+  path: string,
+  records: PresetHistoryRecord[],
+  options: { retainMs?: number | null } = {},
+): void {
+  const retainMs = options.retainMs ?? null;
+  const header =
+    retainMs === null ? "" : `${JSON.stringify({ lwc_history: { v: 1, retainMs } })}\n`;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, records.map((record) => `${JSON.stringify(record)}\n`).join(""));
+  writeFileSync(
+    path,
+    header + records.map((record) => `${JSON.stringify(record)}\n`).join(""),
+  );
 }
 
 /** Nearest-rank percentile, matching the compare and sessions reports. */
