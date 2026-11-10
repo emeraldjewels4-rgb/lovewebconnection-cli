@@ -631,6 +631,23 @@ function describeRetention(summary: PresetsHistorySummary): string | null {
     : `${formatRetention(summary.retainMs)} (nothing older than ${stamp(new Date(cutoff).toISOString())})`;
 }
 
+/** A freshness age as the largest whole unit it covers, so `1 day` reads. */
+function formatAge(ms: number): string {
+  const units: Array<[number, string]> = [
+    [86_400_000, "day"],
+    [3_600_000, "hour"],
+    [60_000, "minute"],
+  ];
+  for (const [size, name] of units) {
+    if (ms >= size) {
+      const count = Math.floor(ms / size);
+      return `${count} ${name}${count === 1 ? "" : "s"}`;
+    }
+  }
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+}
+
 /** A retention span in the largest unit it divides exactly, so `180d` reads. */
 function formatRetention(ms: number): string {
   const units: Array<[number, string]> = [
@@ -732,6 +749,10 @@ export interface PresetsHistoryCheck {
   coverage: { from: string | null; to: string | null; recorded: number };
   /** The retention the file declares, or null when it declares none. */
   retention: { ms: number; label: string; cutoff: string } | null;
+  /** The freshness bound the gate applied, or null when it does not check age. */
+  maxAge: { ms: number; label: string } | null;
+  /** The newest run's age when it exceeds maxAge, or null when the file is fresh. */
+  stale: { newest: string; ageMs: number; age: string } | null;
   /** The filters the gate window applied. */
   window: { since: number | null; until: number | null; limit: number | null };
   gate: { threshold: number; passed: boolean; shortfalls: UptimeShortfall[] };
@@ -748,9 +769,22 @@ export function presetHistoryCheck(
   path: string,
   summary: PresetsHistorySummary,
   threshold: number,
+  options: { maxAgeMs?: number | null; now?: number } = {},
 ): PresetsHistoryCheck {
   const gate = summarizePresetGate(summary, threshold);
   const cutoff = retainedCutoff(summary);
+  const maxAgeMs = options.maxAgeMs ?? null;
+  const now = options.now ?? Date.now();
+  // Retention is anchored to the newest run, but freshness cannot be: the gate
+  // has to know how long ago that run happened, or a file nobody appends to
+  // would keep passing on week-old evidence.
+  const newest = summary.availableTo;
+  const ageMs =
+    maxAgeMs === null || newest === null ? null : Math.max(0, now - Date.parse(newest));
+  const stale =
+    maxAgeMs !== null && newest !== null && ageMs !== null && ageMs > maxAgeMs
+      ? { newest, ageMs, age: formatAge(ageMs) }
+      : null;
 
   return {
     path,
@@ -769,8 +803,10 @@ export function presetHistoryCheck(
             label: formatRetention(summary.retainMs),
             cutoff: new Date(cutoff).toISOString(),
           },
+    maxAge: maxAgeMs === null ? null : { ms: maxAgeMs, label: formatRetention(maxAgeMs) },
+    stale,
     window: { since: summary.since, until: summary.until, limit: summary.limit },
-    gate: { threshold, passed: gate.passed, shortfalls: gate.shortfalls },
+    gate: { threshold, passed: gate.passed && stale === null, shortfalls: gate.shortfalls },
     note:
       cutoff !== null && summary.since !== null && summary.since < cutoff
         ? `the window starts ${stamp(new Date(summary.since).toISOString())}, before the retained history (${stamp(new Date(cutoff).toISOString())}); missing runs may have been pruned, not failed.`
@@ -808,6 +844,15 @@ export function formatPresetHistoryCheck(check: PresetsHistoryCheck): string {
     );
   }
   if (check.note !== null) lines.push(field("note", check.note));
+  if (check.maxAge !== null) lines.push(field("max age", check.maxAge.label));
+  if (check.stale !== null && check.maxAge !== null) {
+    lines.push(
+      field(
+        "stale",
+        `newest run ${stamp(check.stale.newest)} is ${check.stale.age} old, past the ${check.maxAge.label} maximum.`,
+      ),
+    );
+  }
 
   if (check.runs === 0) {
     lines.push(
@@ -822,6 +867,22 @@ export function formatPresetHistoryCheck(check: PresetsHistoryCheck): string {
     const presets = `${check.presets} preset${check.presets === 1 ? "" : "s"}`;
     lines.push(
       field("gate", `PASS — all ${presets} stayed at or above ${gate.threshold}% across ${runs}.`),
+    );
+    return lines.join("\n");
+  }
+
+  if (gate.shortfalls.length === 0) {
+    // Freshness is the only reason left: every preset cleared the threshold,
+    // but the newest run is too old for that verdict to cover today.
+    lines.push(field("gate", "FAIL — newest run is past the maximum age, so there is nothing fresh to judge."));
+    return lines.join("\n");
+  }
+
+  if (gate.shortfalls.length === 0) {
+    // Freshness is the only reason left: every preset cleared the threshold,
+    // but the newest run is too old for that verdict to cover today.
+    lines.push(
+      field("gate", "FAIL — newest run is past the maximum age, so there is nothing fresh to judge."),
     );
     return lines.join("\n");
   }
@@ -1251,6 +1312,8 @@ export interface PresetsHistoryArgs {
   out: string | null;
   /** Epoch-ms retention window for the merge from --retain, or null to keep everything. */
   retain: number | null;
+  /** Epoch-ms freshness bound from --max-age, or null to judge the gate on uptime alone. */
+  maxAge: number | null;
   /** Report the file's coverage and retention beside the gate in one local pass. */
   check: boolean;
 }
@@ -1293,6 +1356,7 @@ export function parsePresetHistoryArgs(
   const merge: string[] = [];
   let out: string | null = null;
   let retain: number | null = null;
+  let maxAge: number | null = null;
   let check = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -1401,6 +1465,11 @@ export function parsePresetHistoryArgs(
       const value = inline ?? argv[index + 1] ?? "";
       if (inline === null) index += 1;
       retain = parseRetentionMs(value);
+    } else if (arg === "--max-age" || arg.startsWith("--max-age=")) {
+      const inline = arg.startsWith("--max-age=") ? arg.slice("--max-age=".length) : null;
+      const value = inline ?? argv[index + 1] ?? "";
+      if (inline === null) index += 1;
+      maxAge = parseMaxAgeMs(value);
     } else if (arg.startsWith("-")) {
       throw new PresetsHistoryArgError(`unexpected flag "${arg}".`);
     } else if (path !== null) {
@@ -1426,6 +1495,9 @@ export function parsePresetHistoryArgs(
     throw new PresetsHistoryArgError(
       "--retain bounds the combined history, so pass at least one --merge <file>.",
     );
+  }
+  if (maxAge !== null && !check) {
+    throw new PresetsHistoryArgError("--max-age bounds the gate, so pass --check with it.");
   }
   if (check) {
     // The check report is the output, so an export has nowhere to go, and a
@@ -1472,6 +1544,7 @@ export function parsePresetHistoryArgs(
     merge,
     out,
     retain,
+    maxAge,
     check,
   };
 }
@@ -1482,6 +1555,18 @@ export function parseRetentionMs(raw: string): number {
   if (!match) {
     throw new PresetsHistoryArgError(
       `--retain must be a positive span like 180d, got "${raw}".`,
+    );
+  }
+  const unit = SINCE_UNITS_MS[match[2] as keyof typeof SINCE_UNITS_MS];
+  return Number(match[1]) * unit;
+}
+
+/** A freshness bound as a positive span (`7d`), for --max-age. */
+export function parseMaxAgeMs(raw: string): number {
+  const match = /^([1-9]\d*)([smhd])$/.exec(raw.trim());
+  if (!match) {
+    throw new PresetsHistoryArgError(
+      `--max-age must be a positive span like 7d, got "${raw}".`,
     );
   }
   const unit = SINCE_UNITS_MS[match[2] as keyof typeof SINCE_UNITS_MS];

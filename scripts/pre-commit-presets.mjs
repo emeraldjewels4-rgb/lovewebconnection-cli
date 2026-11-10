@@ -7,7 +7,11 @@
 //
 // usage:
 //   node scripts/pre-commit-presets.mjs --history .lwc-history/presets.jsonl \
-//     --since 7d --fail-under 95
+//     --since 7d --max-age 7d --fail-under 95
+//
+// --max-age (or LWC_MAX_AGE, one week by default) fails the gate when the
+// newest recorded run is older than that span: a healthy file nobody appends
+// to proves nothing about today.
 //
 // Exit codes are the contract a hook relies on:
 //   0  the gate passed, or there is no history yet to gate
@@ -22,6 +26,7 @@ import {
   PresetsHistoryArgError,
   formatPresetHistoryCheck,
   parsePresetHistoryArgs,
+  parseMaxAgeMs,
   parseRetentionMs,
   presetHistoryCheck,
   readPresetHistoryFile,
@@ -34,13 +39,16 @@ const DEFAULT_THRESHOLD = "95";
 function usage(message) {
   console.error(`usage error: ${message}`);
   console.error(
-    "  example: node scripts/pre-commit-presets.mjs --history .lwc-history/presets.jsonl --since 7d --fail-under 95",
+    "  example: node scripts/pre-commit-presets.mjs --history .lwc-history/presets.jsonl --since 7d --max-age 7d --fail-under 95",
   );
   process.exit(2);
 }
 
 let history = process.env.LWC_PRESETS_HISTORY || DEFAULT_HISTORY;
 let thresholdRaw = process.env.LWC_FAIL_UNDER?.trim() || null;
+// A week matches the default window: a gate never vouches for evidence older
+// than the period it was asked to judge.
+let maxAgeRaw = process.env.LWC_MAX_AGE?.trim() || "7d";
 let strictMissing = false;
 let json = false;
 const passthrough = [];
@@ -64,6 +72,10 @@ for (let index = 0; index < argv.length; index += 1) {
     strictMissing = true;
   } else if (arg === "--json") {
     json = true;
+  } else if (arg === "--max-age" || arg.startsWith("--max-age=")) {
+    maxAgeRaw = arg.startsWith("--max-age=")
+      ? arg.slice("--max-age=".length)
+      : readValue("--max-age");
   } else if (arg === "--fail-under" || arg.startsWith("--fail-under=")) {
     thresholdRaw = arg.startsWith("--fail-under=")
       ? arg.slice("--fail-under=".length)
@@ -84,6 +96,8 @@ try {
   args = parsePresetHistoryArgs([
     history,
     ...passthrough,
+    "--max-age",
+    maxAgeRaw,
     "--check",
     "--fail-under",
     thresholdRaw || DEFAULT_THRESHOLD,
@@ -137,23 +151,33 @@ const summary = summarizePresetHistory(
   { since: args.since, until: args.until, limit: args.limit },
   { retainMs },
 );
-const check = presetHistoryCheck(args.path, summary, args.failUnder);
+const check = presetHistoryCheck(args.path, summary, args.failUnder, {
+  maxAgeMs: args.maxAge,
+});
 
 if (json) console.log(JSON.stringify(check, null, 2));
 if (check.gate.passed) process.exit(0);
 
 if (json) {
   // The report stays on stderr so stdout is still a single parsed document.
-  const shortfalls =
-    check.runs === 0
-      ? [
-          `no runs in the window (${check.coverage.recorded} recorded), so ${check.gate.threshold}% cannot be verified.`,
-        ]
-      : check.gate.shortfalls.map(
-          (row) =>
-            `${row.preset} uptime ${row.uptimePct}% over ${row.runs} run${row.runs === 1 ? "" : "s"} is below ${check.gate.threshold}%.`,
-        );
-  for (const line of shortfalls) console.error(`error: ${line}`);
+  const reasons = [];
+  if (check.stale !== null) {
+    reasons.push(
+      `newest run ${check.stale.newest} is ${check.stale.age} old, past the ${check.maxAge?.label ?? "maximum"} maximum.`,
+    );
+  }
+  if (check.runs === 0) {
+    reasons.push(
+      `no runs in the window (${check.coverage.recorded} recorded), so ${check.gate.threshold}% cannot be verified.`,
+    );
+  } else {
+    for (const row of check.gate.shortfalls) {
+      reasons.push(
+        `${row.preset} uptime ${row.uptimePct}% over ${row.runs} run${row.runs === 1 ? "" : "s"} is below ${check.gate.threshold}%.`,
+      );
+    }
+  }
+  for (const line of reasons) console.error(`error: ${line}`);
 } else {
   console.error(formatPresetHistoryCheck(check));
 }

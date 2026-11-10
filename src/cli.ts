@@ -386,7 +386,9 @@ if (isPresetHistory) {
           "--check reports a gate, so pass --fail-under <pct> with it.",
         );
       }
-      const check = presetHistoryCheck(historyPath, summary, threshold);
+      const check = presetHistoryCheck(historyPath, summary, threshold, {
+        maxAgeMs: args.maxAge,
+      });
       console.log(
         asJson ? JSON.stringify(check, null, 2) : formatPresetHistoryCheck(check),
       );

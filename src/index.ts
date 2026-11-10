@@ -373,6 +373,7 @@ export {
   formatPresetHistoryComparison,
   mergePresetHistory,
   parsePresetHistoryArgs,
+  parseMaxAgeMs,
   parseRetentionMs,
   presetHistoryCheck,
   presetHistoryCsv,

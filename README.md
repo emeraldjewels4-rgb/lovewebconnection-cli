@@ -199,7 +199,17 @@ guessed) and cannot be combined with `--csv`, `--timeline` or `--compare`, since
 the report is the output. `--json` emits the same fields as one document, which
 is what a pre-commit hook or a local dashboard reads: `gate` carries the
 threshold, verdict and shortfalls, `coverage` the file's span and recorded runs,
-and `retention` its declared span and cutoff.
+`retention` its declared span and cutoff, and `maxAge`/`stale` the freshness
+bound and the age that broke it.
+
+`--max-age <span>` adds freshness to the check: the gate fails when the newest
+run in the file is older than the span, because a healthy week nobody appended
+to says nothing about today. Exactly at the bound still passes. Unlike
+retention, which is anchored to the newest run so a paused schedule cannot prune
+its own evidence, age is measured against the clock, so it can only be used
+where `--check` asks for a gate. The pre-commit wrapper defaults it to
+`LWC_MAX_AGE` or `7d` and passes `--max-age` through, so a history that stopped
+updating cannot keep passing commits.
 
 The same exit code is what a pre-commit hook blocks on, and
 `scripts/pre-commit-presets.mjs` wraps the check for git: silent when the gate
@@ -209,8 +219,8 @@ refusal to merge rather than gate a file other than the one it names. Exit
 codes are 0 for a pass or skip, 1 for a failed gate and 2 for a misconfigured
 hook; `--json` writes one document to stdout in every outcome, with the
 explanation kept on stderr so stdout stays parseable. The path and threshold
-can come from `LWC_PRESETS_HISTORY` and `LWC_FAIL_UNDER`, which is how the
-repository hook runs it:
+can come from `LWC_PRESETS_HISTORY`, `LWC_FAIL_UNDER` and `LWC_MAX_AGE`, which
+is how the repository hook sets them:
 
 ```sh
 node scripts/pre-commit-presets.mjs --since 7d --fail-under 95

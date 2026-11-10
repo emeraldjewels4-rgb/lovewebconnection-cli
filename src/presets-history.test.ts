@@ -15,6 +15,7 @@ import {
   narrowestRetentionMs,
   readPresetHistoryFile,
   retentionWindowWarnings,
+  parseMaxAgeMs,
   parsePresetHistoryArgs,
   presetHistoryCheck,
   presetHistoryCsv,
@@ -249,6 +250,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     merge: [],
     out: null,
     retain: null,
+    maxAge: null,
     check: false,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--json"]), {
@@ -263,6 +265,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     merge: [],
     out: null,
     retain: null,
+    maxAge: null,
     check: false,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--csv", "-"]), {
@@ -277,6 +280,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     merge: [],
     out: null,
     retain: null,
+    maxAge: null,
     check: false,
   });
   assert.equal(parsePresetHistoryArgs(["h.jsonl", "--timeline", "-"]).timelinePath, "-");
@@ -569,6 +573,7 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
     merge: [],
     out: null,
     retain: null,
+    maxAge: null,
     check: false,
   });
 
@@ -607,6 +612,7 @@ test("parses --until as a closed end, and rejects an inverted window", () => {
     merge: [],
     out: null,
     retain: null,
+    maxAge: null,
     check: false,
   });
 
@@ -897,6 +903,93 @@ test("--check needs a threshold and takes no export or comparison", () => {
       ),
     /--check reports one window/,
   );
+});
+
+test("--max-age fails the gate when the newest run is too old", () => {
+  const now = Date.parse("2026-11-10T06:17:00Z");
+  const summary = summarizePresetHistory([
+    record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453)]),
+  ]);
+
+  const fresh = presetHistoryCheck("presets.jsonl", summary, 95, {
+    maxAgeMs: 7 * 86_400_000,
+    now,
+  });
+  assert.equal(fresh.gate.passed, true);
+  assert.equal(fresh.stale, null);
+  assert.deepEqual(fresh.maxAge, { ms: 604_800_000, label: "7 days" });
+  assert.match(formatPresetHistoryCheck(fresh), /max age\s+7 days/);
+
+  // Exactly at the bound is still fresh; a second past it is not.
+  const boundary = presetHistoryCheck("presets.jsonl", summary, 95, {
+    maxAgeMs: 86_400_000,
+    now,
+  });
+  assert.equal(boundary.gate.passed, true);
+
+  const stale = presetHistoryCheck("presets.jsonl", summary, 95, {
+    maxAgeMs: 12 * 3_600_000,
+    now,
+  });
+  assert.equal(stale.gate.passed, false, "a healthy but stale file cannot pass");
+  assert.deepEqual(stale.maxAge, { ms: 43_200_000, label: "12 hours" });
+  assert.deepEqual(stale.stale, {
+    newest: "2026-11-09T06:17:00.000Z",
+    ageMs: 86_400_000,
+    age: "1 day",
+  });
+  const text = formatPresetHistoryCheck(stale);
+  assert.match(text, /max age\s+12 hours/);
+  assert.match(text, /stale\s+newest run 2026-11-09 06:17 is 1 day old, past the 12 hours maximum\./);
+  assert.match(text, /gate\s+FAIL — newest run is past the maximum age/);
+  assert.doesNotMatch(text, /below 95%/);
+});
+
+test("--max-age keeps a stale shortfall readable in one report", () => {
+  const down = { ok: false, latencyMs: null, blockNumber: null, error: "down" };
+  const summary = summarizePresetHistory([
+    record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1, down)]),
+  ]);
+  const check = presetHistoryCheck("presets.jsonl", summary, 100, {
+    maxAgeMs: 3_600_000,
+    now: Date.parse("2026-11-10T06:17:00Z"),
+  });
+  const text = formatPresetHistoryCheck(check);
+
+  assert.equal(check.gate.passed, false);
+  assert.equal(check.gate.shortfalls.length, 1);
+  assert.deepEqual(check.stale?.age, "1 day");
+  assert.match(text, /stale\s+/);
+  assert.match(text, /gate\s+FAIL — 1 preset below 100% across 1 run\./);
+  assert.match(text, /ethereum\s+1\s+1\s+0%\s+1/);
+});
+
+test("--max-age belongs to the check and takes a positive span", () => {
+  assert.equal(
+    parsePresetHistoryArgs(["h.jsonl", "--check", "--fail-under", "95", "--max-age", "7d"])
+      .maxAge,
+    604_800_000,
+  );
+  assert.equal(
+    parsePresetHistoryArgs(["h.jsonl", "--check", "--fail-under", "95", "--max-age=12h"])
+      .maxAge,
+    43_200_000,
+  );
+  assert.equal(parseMaxAgeMs("90m"), 5_400_000);
+
+  for (const argv of [
+    ["h.jsonl", "--max-age", "7d"],
+    ["h.jsonl", "--check", "--fail-under", "95", "--max-age", "0d"],
+    ["h.jsonl", "--check", "--fail-under", "95", "--max-age", "week"],
+    ["h.jsonl", "--check", "--fail-under", "95", "--max-age"],
+  ]) {
+    assert.throws(
+      () => parsePresetHistoryArgs(argv),
+      (error: unknown) => error instanceof PresetsHistoryArgError,
+      argv.join(" "),
+    );
+  }
 });
 
 test("--since and --limit narrow the summary to the newest runs", () => {
