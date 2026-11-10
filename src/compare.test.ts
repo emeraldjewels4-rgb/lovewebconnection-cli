@@ -391,9 +391,34 @@ test("compareEndpoints reports latency and head freshness per endpoint", async (
 });
 
 test("measures which endpoint delivers a new head first", async () => {
+  // Simulated latency on a shared clock rather than real timers. The fast client
+  // answers at the current tick; the slow one yields once, so the caller has
+  // already recorded its start time, then advances the clock by its delay. The
+  // measured gap is therefore exactly the delay, no matter how loaded or slow
+  // the machine is — the old version slept on setTimeout and failed whenever
+  // parallel test execution compressed the 80ms gap.
+  const clock = { t: 1_000 };
+  const client = (blocks: bigint[], delayMs: number): PublicClient => {
+    let index = 0;
+    return {
+      getChainId: async () => 196,
+      getBlockNumber: async () => {
+        const block = blocks[index];
+        if (block === undefined) throw new Error("rpc unavailable");
+        if (delayMs > 0) {
+          await Promise.resolve();
+          clock.t += delayMs;
+        }
+        index += 1;
+        return block;
+      },
+      getBlock: async () => ({ timestamp: BigInt(Math.floor(clock.t / 1000)) }),
+    } as unknown as PublicClient;
+  };
+
   const clients: Record<string, PublicClient> = {
-    "https://quick.example": stubClient({ blocks: [100n, 101n], delayMs: 10 }),
-    "https://slow.example": stubClient({ blocks: [100n, 101n], delayMs: 80 }),
+    "https://quick.example": client([100n, 101n], 0),
+    "https://slow.example": client([100n, 101n], 80),
   };
 
   const report = await compareEndpoints(
@@ -405,7 +430,11 @@ test("measures which endpoint delivers a new head first", async () => {
       logPath: null,
       logMaxBytes: 0,
     },
-    { clientFor: (target) => clients[target.rpcUrl] as PublicClient, sleep: async () => {} },
+    {
+      clientFor: (target) => clients[target.rpcUrl] as PublicClient,
+      sleep: async () => {},
+      now: () => clock.t,
+    },
   );
 
   const [quick, slow] = report.endpoints;
