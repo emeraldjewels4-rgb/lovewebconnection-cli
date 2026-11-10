@@ -528,6 +528,62 @@ export function formatPresetHistoryComparison(comparison: PresetsHistoryComparis
   return lines.join("\n");
 }
 
+/** Table cells in a CI summary cannot hold pipes or newlines. */
+function mdCell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
+/**
+ * Markdown for a CI run summary: the current window beside an earlier one, so
+ * a scheduled run reports the week-over-week delta without anyone asking.
+ */
+export function presetComparisonMarkdown(
+  comparison: PresetsHistoryComparison,
+  heading = "Preset comparison",
+): string {
+  const { before, after } = comparison;
+  const lines = [`### ${heading}`, ""];
+  const span = (summary: PresetsHistorySummary): string =>
+    summary.runs === 0
+      ? `no runs (${summary.totalRuns} recorded)`
+      : `${summary.runs} run${summary.runs === 1 ? "" : "s"} (${stamp(summary.from)} → ${stamp(summary.to)})`;
+
+  if (after.runs === 0) {
+    lines.push(`**No runs in the current window** — ${span(after)}; nothing to compare.`);
+    return lines.join("\n");
+  }
+
+  if (before.runs === 0) {
+    lines.push(
+      `**No earlier runs to compare against** — ${span(before)}; the current window is ${span(after)}.`,
+    );
+    return lines.join("\n");
+  }
+
+  const regressions = comparison.presets.filter((row) => row.deltaPct !== null && row.deltaPct < 0);
+  const improvements = comparison.presets.filter((row) => row.deltaPct !== null && row.deltaPct > 0);
+  const overall = round1((windowUptime(after) ?? 0) - (windowUptime(before) ?? 0));
+
+  lines.push(
+    `**${regressions.length} regressed, ${improvements.length} improved** across ${comparison.presets.length} preset${comparison.presets.length === 1 ? "" : "s"}.`,
+    "",
+    `Earlier: ${span(before)} — current: ${span(after)}. Overall uptime ${pp(overall)}.`,
+    "",
+    "| preset | chain | before runs | before uptime | after runs | after uptime | change |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    ...comparison.presets.map((row) => {
+      const beforeRuns = row.before === null ? "—" : String(row.before.runs);
+      const beforeUptime = row.before === null ? "—" : `${row.before.uptimePct}%`;
+      const afterRuns = row.after === null ? "—" : String(row.after.runs);
+      const afterUptime = row.after === null ? "—" : `${row.after.uptimePct}%`;
+      const change = row.deltaPct === null ? "—" : pp(row.deltaPct);
+      return `| \`${mdCell(row.preset)}\` | ${row.chainId} | ${beforeRuns} | ${beforeUptime} | ${afterRuns} | ${afterUptime} | ${change} |`;
+    }),
+  );
+
+  return lines.join("\n");
+}
+
 export function toPresetHistoryJson(summary: PresetsHistorySummary): PresetsHistorySummary {
   return summary;
 }
@@ -761,11 +817,6 @@ export function parsePresetHistoryArgs(
   if (compare !== null) {
     if (csvPath !== null || timelinePath !== null) {
       throw new PresetsHistoryArgError("--compare cannot be combined with --csv or --timeline.");
-    }
-    if (failUnder !== null) {
-      throw new PresetsHistoryArgError(
-        "--compare cannot be combined with --fail-under; the gate judges one window.",
-      );
     }
     if (limit !== null) {
       throw new PresetsHistoryArgError("--compare cannot be combined with --limit.");

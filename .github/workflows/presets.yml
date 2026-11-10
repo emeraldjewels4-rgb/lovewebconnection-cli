@@ -33,6 +33,9 @@ jobs:
       # still catching a provider that has been flaky all week.
       FAIL_UNDER: ${{ github.event.inputs.fail_under || '95' }}
       FAIL_WINDOW: 7d
+      # The same span immediately before FAIL_WINDOW, so each run publishes
+      # this week's uptime beside the week it replaced.
+      COMPARE_WINDOW: 14d..7d
 
     steps:
       - name: Check out
@@ -84,9 +87,11 @@ jobs:
 
       # A healthy run can follow a flaky week, so the gate holds the recent
       # window to a minimum uptime and fails the job when a preset has been
-      # below it. An empty window or unreadable history fails too: neither can
-      # show the threshold was met. `always()` keeps the outcome in the summary
-      # even when the probe above already failed.
+      # below it. The same step publishes the week-over-week comparison, so a
+      # provider change shows its delta without anyone asking for it. An empty
+      # window or unreadable history fails too: neither can show the threshold
+      # was met. `always()` keeps the outcome in the summary even when the probe
+      # above already failed.
       - name: Check uptime over the window
         if: always()
-        run: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since "$FAIL_WINDOW" --fail-under "$FAIL_UNDER"
+        run: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since "$FAIL_WINDOW" --compare "$COMPARE_WINDOW" --fail-under "$FAIL_UNDER"

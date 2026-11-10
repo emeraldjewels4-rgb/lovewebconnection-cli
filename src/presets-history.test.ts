@@ -12,6 +12,7 @@ import {
   formatPresetHistoryComparison,
   parsePresetHistoryArgs,
   presetHistoryCsv,
+  presetComparisonMarkdown,
   presetHistoryTimelineCsv,
   presetsBelowUptime,
   readPresetHistory,
@@ -318,6 +319,13 @@ test("parses --compare as an earlier window that ends before --since", () => {
       until: Date.parse("2026-11-08T00:00:00Z"),
     },
   );
+  // CI gates the current window and compares it in the same run.
+  const gated = parsePresetHistoryArgs(
+    ["h.jsonl", "--since", "7d", "--compare", "14d..7d", "--fail-under", "90"],
+    now,
+  );
+  assert.equal(gated.failUnder, 90);
+  assert.deepEqual(gated.compare, { since: now - 14 * day, until: now - 7 * day });
 
   for (const argv of [
     ["h.jsonl", "--compare", "14d"],
@@ -330,7 +338,6 @@ test("parses --compare as an earlier window that ends before --since", () => {
     ["h.jsonl", "--compare", "14d..7d"],
     ["h.jsonl", "--since", "8d", "--compare", "14d..7d"],
     ["h.jsonl", "--since", "7d", "--compare", "14d..7d", "--limit", "2"],
-    ["h.jsonl", "--since", "7d", "--compare", "14d..7d", "--fail-under", "90"],
     ["h.jsonl", "--since", "7d", "--compare", "14d..7d", "--csv", "-"],
     ["h.jsonl", "--since", "7d", "--compare", "14d..7d", "--timeline", "-"],
   ]) {
@@ -631,6 +638,51 @@ test("--compare explains an empty current window", () => {
   assert.equal(comparison.before.runs, 1);
   assert.match(text, /after\s+no runs \(1 recorded\)/);
   assert.match(text, /no runs in the current window; widen the window and try again/);
+});
+
+test("presetComparisonMarkdown renders the delta for a CI summary", () => {
+  const down = { ok: false, latencyMs: null, blockNumber: null, error: "down" };
+  const comparison = comparePresetHistory(
+    [
+      record("2026-11-01T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1)]),
+      record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1, down)]),
+      record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1, down)]),
+    ],
+    { since: Date.parse("2026-11-08T00:00:00Z") },
+    { since: Date.parse("2026-11-01T00:00:00Z"), until: Date.parse("2026-11-02T00:00:00Z") },
+  );
+  const markdown = presetComparisonMarkdown(comparison, "Preset week over week");
+
+  assert.match(markdown, /^### Preset week over week/);
+  assert.match(markdown, /\*\*1 regressed, 0 improved\*\* across 2 presets/);
+  assert.match(markdown, /Earlier: 1 run .* — current: 2 runs .*\. Overall uptime -100pp\./);
+  assert.match(
+    markdown,
+    /\| preset \| chain \| before runs \| before uptime \| after runs \| after uptime \| change \|/,
+  );
+  assert.match(markdown, /\| `ethereum` \| 1 \| 1 \| 100% \| 2 \| 0% \| -100pp \|/);
+  assert.match(markdown, /\| `base` \| 8453 \| 1 \| 100% \| 2 \| 100% \| 0pp \|/);
+});
+
+test("presetComparisonMarkdown explains what it cannot compare", () => {
+  const records = [record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)])];
+  const markdown = presetComparisonMarkdown(
+    comparePresetHistory(
+      records,
+      { since: Date.parse("2026-11-08T00:00:00Z") },
+      { since: Date.parse("2026-10-01T00:00:00Z"), until: Date.parse("2026-10-08T00:00:00Z") },
+    ),
+  );
+  assert.match(markdown, /\*\*No earlier runs to compare against\*\*/);
+
+  const empty = presetComparisonMarkdown(
+    comparePresetHistory(
+      records,
+      { since: Date.parse("2026-12-01T00:00:00Z") },
+      { since: Date.parse("2026-10-01T00:00:00Z"), until: Date.parse("2026-10-08T00:00:00Z") },
+    ),
+  );
+  assert.match(empty, /\*\*No runs in the current window\*\*/);
 });
 
 test("presetHistoryCsv exports one row per preset with blanks for missing values", () => {

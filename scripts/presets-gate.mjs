@@ -3,14 +3,18 @@
 // to the job summary. It reuses the same summary functions as
 // `lwc presets-history`, so the CI verdict cannot drift from the CLI view.
 //
-// usage: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --fail-under 95
+// usage: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --compare 14d..7d --fail-under 95
 // Writes to $GITHUB_STEP_SUMMARY when set, otherwise prints to stdout.
 // Exits 1 when a preset is below the threshold or the window cannot be checked.
+// --compare adds the earlier window to the summary; the verdict still comes from
+// the current one, so a week-over-week delta is published without weakening the gate.
 import { appendFileSync } from "node:fs";
 
 import {
   PresetsHistoryArgError,
+  comparePresetHistory,
   parsePresetHistoryArgs,
+  presetComparisonMarkdown,
   readPresetHistory,
   summarizePresetGate,
   summarizePresetHistory,
@@ -30,7 +34,7 @@ function write(line) {
 function usage(message) {
   console.error(`usage error: ${message}`);
   console.error(
-    "  example: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --fail-under 95",
+    "  example: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --compare 14d..7d --fail-under 95",
   );
   process.exit(1);
 }
@@ -63,7 +67,17 @@ const summary = summarizePresetHistory(records, {
   limit: args.limit,
 });
 const gate = summarizePresetGate(summary, args.failUnder);
-write(`${gate.markdown}\n`);
+const comparison =
+  args.compare === null
+    ? null
+    : comparePresetHistory(records, { since: args.since, until: args.until }, args.compare);
+const markdown = [
+  gate.markdown,
+  comparison === null ? null : presetComparisonMarkdown(comparison, "Preset week over week"),
+]
+  .filter((part) => part !== null)
+  .join("\n\n");
+write(`${markdown}\n`);
 
 for (const row of gate.shortfalls) {
   const detail = `${row.preset} uptime ${row.uptimePct}% over ${row.runs} run${row.runs === 1 ? "" : "s"} is below ${args.failUnder}%`;

@@ -169,7 +169,9 @@ the current window starts, and the comparison must end at or before it, so the
 two windows never overlap; a preset that only appears in one of them shows `—`
 for the missing side and no change instead of a fake delta. `--json` carries
 both full summaries under `before` and `after`, and `--compare` is mutually
-exclusive with `--limit`, `--fail-under`, `--csv`, and `--timeline`.
+exclusive with `--limit`, `--csv`, and `--timeline`. It can be combined with
+`--fail-under`: the gate still judges the current window, while the comparison
+is reported beside it.
 
 `--fail-under <pct>` turns the view into a gate: it exits 1 when any preset's
 uptime inside the window is below the percentage, naming each offender on stderr
@@ -186,9 +188,12 @@ last week of history against `--fail-under` (95% by default, settable when
 starting the workflow by hand), writes a PASS/FAIL section naming any preset
 below it, and fails the job — so a provider that has been flaky all week turns
 the schedule red even when that morning's probe happened to answer. An empty or
-unreadable window fails too, rather than passing unchecked. Cache entries expire
-after a week of no use, which shortens the trend window but never the check
-itself.
+unreadable window fails too, rather than passing unchecked. Each run also
+publishes a week-over-week comparison: the same presets over the seven days
+before the gate's window, with the percentage-point change per preset and the
+regressions called out in the headline, so a provider switch shows whether it
+helped on the day it takes effect. Cache entries expire after a week of no use,
+which shortens the trend window but never the check itself.
 
 `--chain` is global, so one shell can work across networks without editing
 `.env`:
