@@ -373,7 +373,7 @@ if (isPresetHistory) {
     const summary = summarizePresetHistory(
       history,
       { since: args.since, until: args.until, limit: args.limit },
-      { retainMs: declaredRetain },
+      { retainMs: readRetain },
     );
     const comparison =
       args.compare === null
@@ -382,6 +382,7 @@ if (isPresetHistory) {
             history,
             { since: args.since, until: args.until },
             args.compare,
+            { retainMs: readRetain },
           );
 
     if (args.timelinePath !== null) {

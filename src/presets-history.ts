@@ -609,6 +609,28 @@ function stamp(iso: string | null): string {
   return iso === null ? "—" : iso.slice(0, 16).replace("T", " ");
 }
 
+/** "from → to" for the whole file, or null when it has no runs. */
+function coverageOf(summary: PresetsHistorySummary): string | null {
+  return summary.availableFrom === null || summary.availableTo === null
+    ? null
+    : `${stamp(summary.availableFrom)} → ${stamp(summary.availableTo)}`;
+}
+
+/** The date a declared retention cuts at, or null when the file has none. */
+function retainedCutoff(summary: PresetsHistorySummary): number | null {
+  return summary.retainMs === null || summary.availableTo === null
+    ? null
+    : Date.parse(summary.availableTo) - summary.retainMs;
+}
+
+/** "3 days (nothing older than …)", or null when the file declares none. */
+function describeRetention(summary: PresetsHistorySummary): string | null {
+  const cutoff = retainedCutoff(summary);
+  return summary.retainMs === null || cutoff === null
+    ? null
+    : `${formatRetention(summary.retainMs)} (nothing older than ${stamp(new Date(cutoff).toISOString())})`;
+}
+
 /** A retention span in the largest unit it divides exactly, so `180d` reads. */
 function formatRetention(ms: number): string {
   const units: Array<[number, string]> = [
@@ -650,16 +672,8 @@ export function formatPresetHistory(summary: PresetsHistorySummary): string {
 
   // The file's own coverage and the retention it declares, so a windowed or
   // trimmed view says what was left out instead of looking like the whole record.
-  const coverage =
-    summary.availableFrom === null || summary.availableTo === null
-      ? null
-      : `${stamp(summary.availableFrom)} → ${stamp(summary.availableTo)}`;
-  const retained =
-    summary.retainMs === null || summary.availableTo === null
-      ? null
-      : `${formatRetention(summary.retainMs)} (nothing older than ${stamp(
-          new Date(Date.parse(summary.availableTo) - summary.retainMs).toISOString(),
-        )})`;
+  const coverage = coverageOf(summary);
+  const retained = describeRetention(summary);
 
   const lines = [
     "lwc — preset health history",
@@ -715,12 +729,14 @@ export function comparePresetHistory(
   records: PresetHistoryRecord[],
   selection: PresetsHistorySelection,
   compare: PresetsHistoryWindow,
+  context: PresetsHistoryContext = {},
 ): PresetsHistoryComparison {
-  const after = summarizePresetHistory(records, selection);
-  const before = summarizePresetHistory(records, {
-    since: compare.since,
-    until: compare.until,
-  });
+  const after = summarizePresetHistory(records, selection, context);
+  const before = summarizePresetHistory(
+    records,
+    { since: compare.since, until: compare.until },
+    context,
+  );
   const earlier = new Map(before.presets.map((row) => [row.preset, row]));
   const later = new Map(after.presets.map((row) => [row.preset, row]));
   const names = [...new Set([...earlier.keys(), ...later.keys()])];
@@ -817,6 +833,24 @@ export function formatPresetHistoryComparison(comparison: PresetsHistoryComparis
 
   lines.push(describe("before", before), describe("after", after));
 
+  // The file's coverage and declared retention, and a warning when the earlier
+  // window starts before the retained history: without it a short before side
+  // reads as a provider fading out rather than as a trim.
+  const coverage = coverageOf(after);
+  const retained = describeRetention(after);
+  const cutoff = retainedCutoff(after);
+  if (coverage !== null) {
+    lines.push(`  ${"covers".padEnd(9)}${coverage} (${after.totalRuns} recorded)`);
+  }
+  if (retained !== null) {
+    lines.push(`  ${"retained".padEnd(9)}${retained}`);
+  }
+  if (cutoff !== null && before.since !== null && before.since < cutoff) {
+    lines.push(
+      `  ${"note".padEnd(9)}the earlier window starts ${stamp(new Date(before.since).toISOString())}, before the retained history (${stamp(new Date(cutoff).toISOString())}), so its delta only covers the runs that remain.`,
+    );
+  }
+
   if (after.runs === 0) {
     lines.push("", "  no runs in the current window; widen the window and try again.");
     return lines.join("\n");
@@ -875,6 +909,10 @@ export function presetComparisonMarkdown(
 ): string {
   const { before, after } = comparison;
   const lines = [`### ${heading}`, ""];
+  const coverage = coverageOf(after);
+  const retained = describeRetention(after);
+  const cutoff = retainedCutoff(after);
+  const short = cutoff !== null && before.since !== null && before.since < cutoff;
   const span = (summary: PresetsHistorySummary): string =>
     summary.runs === 0
       ? `no runs (${summary.totalRuns} recorded)`
@@ -888,6 +926,11 @@ export function presetComparisonMarkdown(
   if (before.runs === 0) {
     lines.push(
       `**No earlier runs to compare against** — ${span(before)}; the current window is ${span(after)}.`,
+      ...(short && cutoff !== null
+        ? [
+            `The earlier window starts before the retained history (${stamp(new Date(cutoff).toISOString())}), so its runs may have been pruned rather than missing.`,
+          ]
+        : []),
     );
     return lines.join("\n");
   }
@@ -900,6 +943,13 @@ export function presetComparisonMarkdown(
     `**${regressions.length} regressed, ${improvements.length} improved** across ${comparison.presets.length} preset${comparison.presets.length === 1 ? "" : "s"}.`,
     "",
     `Earlier: ${span(before)} — current: ${span(after)}. Overall uptime ${pp(overall)}.`,
+    ...(coverage === null ? [] : [`Coverage: ${coverage} (${after.totalRuns} recorded).`]),
+    ...(retained === null ? [] : [`Retained: ${retained}.`]),
+    ...(short && cutoff !== null
+      ? [
+          `The earlier window starts before the retained history (${stamp(new Date(cutoff).toISOString())}), so its delta only covers the runs that remain.`,
+        ]
+      : []),
     "",
     "| preset | chain | before runs | before uptime | after runs | after uptime | change |",
     "| --- | --- | --- | --- | --- | --- | --- |",

@@ -173,7 +173,10 @@ for the missing side and no change instead of a fake delta. `--json` carries
 both full summaries under `before` and `after`, and `--compare` is mutually
 exclusive with `--limit`, `--csv`, and `--timeline`. It can be combined with
 `--fail-under`: the gate still judges the current window, while the comparison
-is reported beside it.
+is reported beside it. The report also states the file's `covers` span and
+declared `retained` window, and when the earlier window starts before the
+retained history it says so: the delta there covers only the runs that remain,
+so a shrinking before side reads as a trim rather than a provider fading out.
 
 `--fail-under <pct>` turns the view into a gate: it exits 1 when any preset's
 uptime inside the window is below the percentage, naming each offender on stderr

@@ -89,7 +89,9 @@ const gate = summarizePresetGate(summary, args.failUnder);
 const comparison =
   args.compare === null
     ? null
-    : comparePresetHistory(records, { since: args.since, until: args.until }, args.compare);
+    : comparePresetHistory(records, { since: args.since, until: args.until }, args.compare, {
+        retainMs,
+      });
 const markdown = [
   gate.markdown,
   comparison === null ? null : presetComparisonMarkdown(comparison, "Preset week over week"),

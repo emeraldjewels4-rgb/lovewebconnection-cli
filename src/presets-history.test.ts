@@ -444,6 +444,36 @@ test("a history with no declared retention says nothing about one", () => {
   assert.doesNotMatch(text, /covers/);
 });
 
+test("the comparison shows the file's coverage and a window older than it", () => {
+  const records = [
+    record("2026-05-01T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-10-20T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453)]),
+  ];
+  const comparison = comparePresetHistory(
+    records,
+    { since: Date.parse("2026-11-08T00:00:00Z") },
+    {
+      since: Date.parse("2026-10-01T00:00:00Z"),
+      until: Date.parse("2026-10-25T00:00:00Z"),
+    },
+    { retainMs: 30 * 86_400_000 },
+  );
+
+  assert.equal(comparison.before.retainMs, 30 * 86_400_000);
+  const text = formatPresetHistoryComparison(comparison);
+  assert.match(text, /covers\s+2026-05-01 06:17 → 2026-11-09 06:17 \(3 recorded\)/);
+  assert.match(text, /retained\s+30 days \(nothing older than 2026-10-10 06:17\)/);
+  assert.match(
+    text,
+    /note\s+the earlier window starts 2026-10-01 00:00, before the retained history \(2026-10-10 06:17\)/,
+  );
+
+  const markdown = presetComparisonMarkdown(comparison);
+  assert.match(markdown, /Retained: 30 days/);
+  assert.match(markdown, /earlier window starts before the retained history/);
+});
+
 test("parses --merge inputs and --out as one combined history", () => {
   const args = parsePresetHistoryArgs([
     "presets.jsonl",
