@@ -375,11 +375,13 @@ export {
   presetHistoryTimelineCsv,
   presetRegressionWarnings,
   presetsBelowUptime,
+  providerRegressionWarnings,
   readPresetHistory,
   savePresetHistoryCsv,
   selectPresetHistory,
   summarizePresetGate,
   summarizePresetHistory,
+  summarizeProviderHistory,
   toPresetHistoryJson,
 } from "./presets-history.ts";
 
@@ -388,6 +390,8 @@ export type {
   PresetHistoryRow,
   PresetUptimeChange,
   PresetsGateReport,
+  ProviderHistoryRow,
+  ProviderUptimeChange,
   PresetsHistoryComparison,
   PresetsHistorySummary,
   PresetsHistoryWindow,

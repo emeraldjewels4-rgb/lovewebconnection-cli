@@ -191,10 +191,14 @@ below it, and fails the job — so a provider that has been flaky all week turns
 the schedule red even when that morning's probe happened to answer. An empty or
 unreadable window fails too, rather than passing unchecked. Each run also
 publishes a week-over-week comparison: the same presets over the seven days
-before the gate's window, with the percentage-point change per preset and theregressions called out in the headline, so a provider switch shows whether it
+before the gate's window, with the percentage-point change per preset and the
+regressions called out in the headline, so a provider switch shows whether it
 helped on the day it takes effect. Every regressed preset also gets a
-`::warning title=Preset regression::` annotation in the run log, so a provider
-that got worse is visible without opening the summary.
+`::warning title=Preset regression::` annotation in the run log, and every
+provider host where those presets' primary endpoints live gets a
+`::warning title=Provider regression::` line, counting a failover against the
+provider. A host that serves several chains is named once, so the log shows
+which upstream got worse — not just which chains — without opening the summary.
 
 The history outlives the cache. Each run restores `.lwc-history/presets.jsonl`
 from the Actions cache and then from a `preset-history` release asset, keeping

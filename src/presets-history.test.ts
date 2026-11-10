@@ -16,9 +16,11 @@ import {
   presetHistoryTimelineCsv,
   presetRegressionWarnings,
   presetsBelowUptime,
+  providerRegressionWarnings,
   readPresetHistory,
   summarizePresetGate,
   summarizePresetHistory,
+  summarizeProviderHistory,
   type PresetHistoryRecord,
 } from "./presets-history.ts";
 import { toPresetsJson, type PresetProbeResult, type PresetsReport } from "./presets.ts";
@@ -695,6 +697,76 @@ test("presetRegressionWarnings names each preset whose uptime fell", () => {
     { since: Date.parse("2026-11-01T00:00:00Z"), until: Date.parse("2026-11-02T00:00:00Z") },
   );
   assert.deepEqual(presetRegressionWarnings(improved), []);
+});
+
+test("provider history pools the presets behind one host and counts a failover against it", () => {
+  const down = { ok: false, latencyMs: null, blockNumber: null, error: "down" };
+  const rows = summarizeProviderHistory([
+    record("2026-11-09T06:17:00.000Z", [
+      endpoint("base", 8453, { primaryHost: "mainnet.example.org" }),
+      endpoint("optimism", 10, {
+        primaryHost: "mainnet.example.org",
+        viaFallback: true,
+        primaryError: "HTTP request failed.",
+        rpcHost: "backup.example.org",
+      }),
+      endpoint("ethereum", 1, {
+        ...down,
+        primaryHost: "eth.example.org",
+        rpcHost: "eth.example.org",
+      }),
+    ]),
+  ]);
+
+  // A backup answering is this provider failing, not a probe the provider passed.
+  assert.deepEqual(
+    rows.map((row) => [row.host, row.probes, row.healthy, row.failovers, row.failed, row.uptimePct]),
+    [
+      ["eth.example.org", 1, 0, 0, 1, 0],
+      ["mainnet.example.org", 2, 1, 1, 0, 50],
+    ],
+  );
+  assert.deepEqual(rows[1]?.presets, ["base", "optimism"]);
+});
+
+test("provider comparisons name the host that fell, once per provider", () => {
+  const down = { ok: false, latencyMs: null, blockNumber: null, error: "down" };
+  const host = "mainnet.example.org";
+  const comparison = comparePresetHistory(
+    [
+      record("2026-11-01T06:17:00.000Z", [
+        endpoint("base", 8453, { primaryHost: host }),
+        endpoint("optimism", 10, { primaryHost: host }),
+      ]),
+      record("2026-11-08T06:17:00.000Z", [
+        endpoint("base", 8453, { ...down, primaryHost: host }),
+        endpoint("optimism", 10, { ...down, primaryHost: host }),
+      ]),
+    ],
+    { since: Date.parse("2026-11-08T00:00:00Z") },
+    { since: Date.parse("2026-11-01T00:00:00Z"), until: Date.parse("2026-11-02T00:00:00Z") },
+  );
+
+  assert.deepEqual(
+    comparison.providers.map((row) => [row.host, row.deltaPct]),
+    [[host, -100]],
+  );
+  assert.equal(comparison.providers[0]?.before?.probes, 2);
+  assert.equal(comparison.providers[0]?.after?.failed, 2);
+  // Two presets fell for one reason, so the run log names the host once.
+  assert.deepEqual(providerRegressionWarnings(comparison), [
+    "mainnet.example.org uptime -100pp: 100% over 2 probes → 0% over 2 probes",
+  ]);
+
+  const flat = comparePresetHistory(
+    [
+      record("2026-11-01T06:17:00.000Z", [endpoint("base", 8453)]),
+      record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+    ],
+    { since: Date.parse("2026-11-08T00:00:00Z") },
+    { since: Date.parse("2026-11-01T00:00:00Z"), until: Date.parse("2026-11-02T00:00:00Z") },
+  );
+  assert.deepEqual(providerRegressionWarnings(flat), []);
 });
 
 test("presetComparisonMarkdown explains what it cannot compare", () => {

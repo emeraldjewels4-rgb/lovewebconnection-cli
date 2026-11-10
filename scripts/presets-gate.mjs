@@ -16,6 +16,7 @@ import {
   parsePresetHistoryArgs,
   presetComparisonMarkdown,
   presetRegressionWarnings,
+  providerRegressionWarnings,
   readPresetHistory,
   summarizePresetGate,
   summarizePresetHistory,
@@ -85,6 +86,11 @@ write(`${markdown}\n`);
 if (comparison !== null) {
   for (const warning of presetRegressionWarnings(comparison)) {
     console.log(`::warning title=Preset regression::${escapeAnnotation(warning)}`);
+  }
+  // The preset lines say which chain fell; these say which upstream behind it
+  // did, so a provider serving several presets is named once instead of thrice.
+  for (const warning of providerRegressionWarnings(comparison)) {
+    console.log(`::warning title=Provider regression::${escapeAnnotation(warning)}`);
   }
 }
 

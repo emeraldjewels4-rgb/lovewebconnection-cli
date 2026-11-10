@@ -93,6 +93,38 @@ export interface PresetsHistoryComparison {
   after: PresetsHistorySummary;
   /** One row per preset seen on either side, worst regression first. */
   presets: PresetUptimeChange[];
+  /** The same comparison pooled per provider host, worst regression first. */
+  providers: ProviderUptimeChange[];
+}
+
+/** One RPC provider across every preset that probes it in a window. */
+export interface ProviderHistoryRow {
+  /** Host of the primary endpoint: the provider being judged. */
+  host: string;
+  /** Preset probes attributed to this provider. */
+  probes: number;
+  /** Probes this provider's own endpoint answered. */
+  healthy: number;
+  /** Probes where it failed and a backup answered instead. */
+  failovers: number;
+  /** Probes where neither endpoint answered. */
+  failed: number;
+  /** Presets this provider serves in the window, sorted. */
+  presets: string[];
+  /** Share of probes the provider answered itself; a failover does not count. */
+  uptimePct: number;
+}
+
+/** One provider's uptime on each side of a comparison. */
+export interface ProviderUptimeChange {
+  /** Host of the primary endpoint, which identifies the provider. */
+  host: string;
+  /** This provider in the earlier window, or null when it was not probed then. */
+  before: ProviderHistoryRow | null;
+  /** This provider in the current window, or null when it is gone now. */
+  after: ProviderHistoryRow | null;
+  /** Percentage-point change (after − before), or null when a side is missing. */
+  deltaPct: number | null;
 }
 
 /** Append this run's report, creating the file and its directory if needed. */
@@ -156,6 +188,61 @@ export function selectPresetHistory(
     return true;
   });
   return limit === null ? inRange : inRange.slice(Math.max(0, inRange.length - limit));
+}
+
+/**
+ * Attribute each probe to the host of the endpoint the preset is configured
+ * with, and pool those by provider: one host that serves several chains is
+ * judged once. A failover counts against the provider, because the backup
+ * answering is the same fact as the provider under test not answering.
+ */
+export function summarizeProviderHistory(
+  records: PresetHistoryRecord[],
+  selection: PresetsHistorySelection = {},
+): ProviderHistoryRow[] {
+  interface Bucket {
+    probes: number;
+    healthy: number;
+    failovers: number;
+    failed: number;
+    presets: Set<string>;
+  }
+
+  const buckets = new Map<string, Bucket>();
+
+  for (const record of selectPresetHistory(records, selection)) {
+    for (const endpoint of record.endpoints) {
+      const host = endpoint.primaryHost;
+      if (!host) continue;
+      const bucket = buckets.get(host) ?? {
+        probes: 0,
+        healthy: 0,
+        failovers: 0,
+        failed: 0,
+        presets: new Set<string>(),
+      };
+
+      bucket.probes += 1;
+      bucket.presets.add(endpoint.preset);
+      if (!endpoint.ok) bucket.failed += 1;
+      else if (endpoint.viaFallback) bucket.failovers += 1;
+      else bucket.healthy += 1;
+
+      buckets.set(host, bucket);
+    }
+  }
+
+  return [...buckets.entries()]
+    .map(([host, bucket]): ProviderHistoryRow => ({
+      host,
+      probes: bucket.probes,
+      healthy: bucket.healthy,
+      failovers: bucket.failovers,
+      failed: bucket.failed,
+      presets: [...bucket.presets].sort(),
+      uptimePct: round1((bucket.healthy / bucket.probes) * 100),
+    }))
+    .sort((a, b) => a.host.localeCompare(b.host));
 }
 
 export function summarizePresetHistory(
@@ -451,7 +538,41 @@ export function comparePresetHistory(
       return a.deltaPct - b.deltaPct || a.preset.localeCompare(b.preset);
     });
 
-  return { before, after, presets };
+  const providers = compareProviders(
+    summarizeProviderHistory(records, { since: compare.since, until: compare.until }),
+    summarizeProviderHistory(records, selection),
+  );
+
+  return { before, after, presets, providers };
+}
+
+/** Pair two provider windows by host, listing a fall first, as presets do. */
+function compareProviders(
+  earlier: ProviderHistoryRow[],
+  later: ProviderHistoryRow[],
+): ProviderUptimeChange[] {
+  const was = new Map(earlier.map((row) => [row.host, row]));
+  const now = new Map(later.map((row) => [row.host, row]));
+  const hosts = [...new Set([...was.keys(), ...now.keys()])];
+
+  return hosts
+    .map((host): ProviderUptimeChange => {
+      const before = was.get(host) ?? null;
+      const after = now.get(host) ?? null;
+      return {
+        host,
+        before,
+        after,
+        deltaPct: before === null || after === null ? null : round1(after.uptimePct - before.uptimePct),
+      };
+    })
+    .sort((a, b) => {
+      if (a.deltaPct === null || b.deltaPct === null) {
+        if (a.deltaPct !== b.deltaPct) return a.deltaPct === null ? 1 : -1;
+        return a.host.localeCompare(b.host);
+      }
+      return a.deltaPct - b.deltaPct || a.host.localeCompare(b.host);
+    });
 }
 
 function round1(value: number): number {
@@ -599,6 +720,25 @@ export function presetRegressionWarnings(comparison: PresetsHistoryComparison): 
   };
 
   return comparison.presets
+    .map(line)
+    .filter((value): value is string => value !== null);
+}
+
+/**
+ * One line per provider host whose uptime fell, worst first. The same week can
+ * regress several presets for one reason; this names the upstream once, so the
+ * run log says which provider got worse rather than only which chains did.
+ */
+export function providerRegressionWarnings(comparison: PresetsHistoryComparison): string[] {
+  const line = (row: ProviderUptimeChange): string | null => {
+    if (row.deltaPct === null || row.deltaPct >= 0 || row.before === null || row.after === null) {
+      return null;
+    }
+    const probes = (count: number): string => `${count} probe${count === 1 ? "" : "s"}`;
+    return `${row.host} uptime ${pp(row.deltaPct)}: ${row.before.uptimePct}% over ${probes(row.before.probes)} → ${row.after.uptimePct}% over ${probes(row.after.probes)}`;
+  };
+
+  return comparison.providers
     .map(line)
     .filter((value): value is string => value !== null);
 }
