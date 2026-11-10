@@ -39,6 +39,18 @@ cp .env.example .env    # then edit .env
 `.env` is gitignored. Nothing secret belongs in the repo. The template starts on
 the `xlayer` preset, so a fresh copy works without editing anything.
 
+`npm install` also installs the pre-commit hook: its `prepare` script points
+`core.hooksPath` at `.githooks`, so every commit runs `npm run typecheck` and
+`npm test` first. Expect it to add 15–25 seconds to a commit.
+
+Skip it when you need to:
+
+```bash
+git commit --no-verify      # once
+npm test                    # ...then run the checks yourself
+git config --unset core.hooksPath   # until the next npm install
+```
+
 ## Connect
 
 ```bash
