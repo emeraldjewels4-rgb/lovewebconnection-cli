@@ -415,6 +415,10 @@ export interface ProbeOutcome {
 }
 
 function describeError(error: unknown): string {
+  // viem's own message spans several lines; its one-line summary keeps the
+  // failover note readable in a single table row.
+  const short = (error as { shortMessage?: unknown } | null)?.shortMessage;
+  if (typeof short === "string" && short.length > 0) return short;
   return error instanceof Error ? error.message : String(error);
 }
 
