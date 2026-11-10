@@ -61,6 +61,36 @@ jobs:
           restore-keys: |
             preset-health-
 
+      # The cache is fast but short-lived: an entry idle for a week is evicted,
+      # and a paused schedule would lose the trend. The release asset is the
+      # durable copy, so a month of runs keeps a month of comparisons.
+      - name: Restore the durable history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          cached=.lwc-history/presets.jsonl
+          durable=.lwc-history/durable.jsonl
+          rm -f "$durable"
+          if ! gh release download preset-history --pattern presets.jsonl --output "$durable" --clobber; then
+            echo "no durable history yet; the cache is all there is"
+            exit 0
+          fi
+          if [ ! -s "$durable" ]; then
+            echo "the durable copy is empty; keeping the cache"
+            exit 0
+          fi
+          cached_runs=0
+          if [ -s "$cached" ]; then cached_runs=$(wc -l < "$cached"); fi
+          durable_runs=$(wc -l < "$durable")
+          if [ "$durable_runs" -ge "$cached_runs" ]; then
+            mv "$durable" "$cached"
+            echo "restored $durable_runs runs from the release"
+          else
+            echo "the cache has $cached_runs runs, the release $durable_runs; keeping the cache"
+            rm -f "$durable"
+          fi
+
       # The command already exits 1 when any endpoint is unhealthy, so its status
       # is the verdict. It is captured instead of aborting the step, so the
       # summary of a failed run is still written.
@@ -95,3 +125,53 @@ jobs:
       - name: Check uptime over the window
         if: always()
         run: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since "$FAIL_WINDOW" --compare "$COMPARE_WINDOW" --fail-under "$FAIL_UNDER"
+
+      # The archive job is the only one with write access, so the probe keeps
+      # its read-only permissions. `always()` keeps a failed week in the record,
+      # which is the week the next comparison most wants to see.
+      - name: Upload the history for archiving
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preset-history
+          path: .lwc-history/presets.jsonl
+          if-no-files-found: ignore
+          retention-days: 1
+
+  archive:
+    name: archive preset history
+    needs: probe
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Writing is confined to this job, and only to the release asset.
+    permissions:
+      contents: write
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Fetch the history from this run
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: preset-history
+          path: .lwc-history
+
+      - name: Publish the durable history
+        run: |
+          set -euo pipefail
+          file=.lwc-history/presets.jsonl
+          if [ ! -s "$file" ]; then
+            echo "::warning::No history was produced; the release is unchanged."
+            exit 0
+          fi
+          if ! gh release view preset-history >/dev/null 2>&1; then
+            gh release create preset-history \
+              --title "Preset health history" \
+              --notes "Machine-managed history of the scheduled preset probe. The workflow rewrites presets.jsonl on every run; do not edit it here." \
+              --latest=false
+          fi
+          gh release upload preset-history "$file" --clobber
+          echo "published $(wc -l < "$file") runs"
