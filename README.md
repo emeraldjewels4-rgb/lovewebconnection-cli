@@ -129,6 +129,7 @@ lwc presets-history .lwc-history/presets.jsonl --limit 20    # the newest 20
 lwc presets-history .lwc-history/presets.jsonl --since 7d --until 1d
 lwc presets-history .lwc-history/presets.jsonl --since 7d --csv ./presets.csv
 lwc presets-history .lwc-history/presets.jsonl --since 7d --timeline ./timeline.csv
+lwc presets-history .lwc-history/presets.jsonl --since 7d --compare 14d..7d
 lwc presets-history .lwc-history/presets.jsonl --since 7d --fail-under 99
 ```
 
@@ -159,6 +160,16 @@ one row per preset per run, oldest first, with `ok`, `via`, latency, block,
 host and both error fields — so uptime and latency can be plotted as a time
 series instead of collapsed into a window summary. `--csv` and `--timeline` are
 separate exports and cannot be combined.
+
+`--compare <from>..<to>` puts an earlier window next to the current one, which
+is what judges a provider change: both sides are read in the same syntax as
+`--since`/`--until`, and each preset reports its runs and uptime on both sides
+plus the percentage-point change, worst regression first. `--since` marks where
+the current window starts, and the comparison must end at or before it, so the
+two windows never overlap; a preset that only appears in one of them shows `—`
+for the missing side and no change instead of a fake delta. `--json` carries
+both full summaries under `before` and `after`, and `--compare` is mutually
+exclusive with `--limit`, `--fail-under`, `--csv`, and `--timeline`.
 
 `--fail-under <pct>` turns the view into a gate: it exits 1 when any preset's
 uptime inside the window is below the percentage, naming each offender on stderr

@@ -65,6 +65,36 @@ export interface PresetsHistorySummary {
   presets: PresetHistoryRow[];
 }
 
+/** The earlier window `--compare <from>..<to>` reads as the "before" side. */
+export interface PresetsHistoryWindow {
+  /** Epoch-ms start, inclusive, reusing the --since syntax. */
+  since: number;
+  /** Epoch-ms end, inclusive, reusing the --until syntax. */
+  until: number;
+}
+
+/** One preset's uptime on each side of a comparison. */
+export interface PresetUptimeChange {
+  preset: string;
+  chainId: number;
+  nativeSymbol: string;
+  /** This preset in the earlier window, or null when it was not probed then. */
+  before: PresetHistoryRow | null;
+  /** This preset in the current window, or null when it was not probed now. */
+  after: PresetHistoryRow | null;
+  /** Percentage-point change (after − before), or null when a side is missing. */
+  deltaPct: number | null;
+}
+
+export interface PresetsHistoryComparison {
+  /** The earlier window, with the same shape as any other summary. */
+  before: PresetsHistorySummary;
+  /** The current window (`--since`/`--until`, no `--limit`). */
+  after: PresetsHistorySummary;
+  /** One row per preset seen on either side, worst regression first. */
+  presets: PresetUptimeChange[];
+}
+
 /** Append this run's report, creating the file and its directory if needed. */
 export function appendPresetHistory(
   path: string,
@@ -378,6 +408,126 @@ export function formatPresetHistory(summary: PresetsHistorySummary): string {
   return lines.join("\n");
 }
 
+/**
+ * Judge a provider change by reading the same presets in two windows: the
+ * current one from the usual filters, and an explicit earlier one. Both sides
+ * are ordinary summaries, so a delta cannot disagree with either table.
+ */
+export function comparePresetHistory(
+  records: PresetHistoryRecord[],
+  selection: PresetsHistorySelection,
+  compare: PresetsHistoryWindow,
+): PresetsHistoryComparison {
+  const after = summarizePresetHistory(records, selection);
+  const before = summarizePresetHistory(records, {
+    since: compare.since,
+    until: compare.until,
+  });
+  const earlier = new Map(before.presets.map((row) => [row.preset, row]));
+  const later = new Map(after.presets.map((row) => [row.preset, row]));
+  const names = [...new Set([...earlier.keys(), ...later.keys()])];
+
+  const presets = names
+    .map((preset): PresetUptimeChange => {
+      const was = earlier.get(preset) ?? null;
+      const now = later.get(preset) ?? null;
+      const known = (now ?? was)!;
+      return {
+        preset,
+        chainId: known.chainId,
+        nativeSymbol: known.nativeSymbol,
+        before: was,
+        after: now,
+        deltaPct: was === null || now === null ? null : round1(now.uptimePct - was.uptimePct),
+      };
+    })
+    // A regression is what a provider change is judged on, so it reads first.
+    // Presets only present on one side have no delta and close the table.
+    .sort((a, b) => {
+      if (a.deltaPct === null || b.deltaPct === null) {
+        if (a.deltaPct !== b.deltaPct) return a.deltaPct === null ? 1 : -1;
+        return a.preset.localeCompare(b.preset);
+      }
+      return a.deltaPct - b.deltaPct || a.preset.localeCompare(b.preset);
+    });
+
+  return { before, after, presets };
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+/** A percentage-point change with its sign, so an improvement reads as one. */
+function pp(value: number): string {
+  const rounded = round1(value);
+  if (rounded === 0) return "0pp";
+  return `${rounded > 0 ? "+" : ""}${rounded}pp`;
+}
+
+/** Overall uptime of a window to one decimal, or null when it has no runs. */
+function windowUptime(summary: PresetsHistorySummary): number | null {
+  return summary.runs === 0 ? null : round1((summary.healthyRuns / summary.runs) * 100);
+}
+
+export function formatPresetHistoryComparison(comparison: PresetsHistoryComparison): string {
+  const { before, after } = comparison;
+  const lines = ["lwc — preset health comparison", ""];
+
+  const describe = (label: string, summary: PresetsHistorySummary): string => {
+    const uptime = windowUptime(summary);
+    if (uptime === null) {
+      return `  ${label.padEnd(9)}no runs (${summary.totalRuns} recorded)`;
+    }
+    const runs = `${summary.runs} run${summary.runs === 1 ? "" : "s"}`;
+    return `  ${label.padEnd(9)}${runs} (${stamp(summary.from)} → ${stamp(summary.to)}), uptime ${uptime}%`;
+  };
+
+  lines.push(describe("before", before), describe("after", after));
+
+  if (after.runs === 0) {
+    lines.push("", "  no runs in the current window; widen the window and try again.");
+    return lines.join("\n");
+  }
+
+  const earlierUptime = windowUptime(before);
+  const overall = earlierUptime === null ? null : round1((windowUptime(after) ?? 0) - earlierUptime);
+  const changes: string[] = [];
+  if (overall !== null) changes.push(`${pp(overall)} overall`);
+  const worse = comparison.presets.filter((row) => row.deltaPct !== null && row.deltaPct < 0).length;
+  const better = comparison.presets.filter((row) => row.deltaPct !== null && row.deltaPct > 0).length;
+  if (worse > 0) changes.push(`${worse} preset${worse === 1 ? "" : "s"} worse`);
+  if (better > 0) changes.push(`${better} better`);
+  lines.push(`  ${"change".padEnd(9)}${changes.length === 0 ? "—" : changes.join(", ")}`, "");
+
+  const rows = comparison.presets.map((row) => [
+    row.preset,
+    String(row.chainId),
+    row.before === null ? "—" : String(row.before.runs),
+    row.before === null ? "—" : `${row.before.uptimePct}%`,
+    row.after === null ? "—" : String(row.after.runs),
+    row.after === null ? "—" : `${row.after.uptimePct}%`,
+    row.deltaPct === null ? "—" : pp(row.deltaPct),
+  ]);
+  const headers = [
+    "preset",
+    "chain",
+    "before runs",
+    "before uptime",
+    "after runs",
+    "after uptime",
+    "change",
+  ];
+  const widths = headers.map((header, column) =>
+    Math.max(header.length, ...rows.map((row) => row[column]!.length)),
+  );
+  const line = (cells: string[]): string =>
+    `  ${cells.map((cell, column) => cell.padEnd(widths[column]!)).join("  ").trimEnd()}`;
+
+  lines.push(line(headers), ...rows.map(line));
+  return lines.join("\n");
+}
+
 export function toPresetHistoryJson(summary: PresetsHistorySummary): PresetsHistorySummary {
   return summary;
 }
@@ -476,6 +626,8 @@ export interface PresetsHistoryArgs {
   csvPath: string | null;
   /** Where to write the per-run timeline CSV, "-" for stdout, or null. */
   timelinePath: string | null;
+  /** The earlier window from --compare, or null to report one window. */
+  compare: PresetsHistoryWindow | null;
 }
 
 const SINCE_UNITS_MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
@@ -512,6 +664,7 @@ export function parsePresetHistoryArgs(
   let failUnder: number | null = null;
   let csvPath: string | null = null;
   let timelinePath: string | null = null;
+  let compare: PresetsHistoryWindow | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
@@ -574,6 +727,21 @@ export function parsePresetHistoryArgs(
         throw new PresetsHistoryArgError("--timeline requires a path, or - for stdout.");
       }
       timelinePath = value;
+    } else if (arg === "--compare" || arg.startsWith("--compare=")) {
+      const inline = arg.startsWith("--compare=") ? arg.slice("--compare=".length) : null;
+      const value = inline ?? argv[index + 1] ?? "";
+      if (inline === null) index += 1;
+      if (!value) throw new PresetsHistoryArgError("--compare requires a window like 14d..7d.");
+      const parts = value.split("..");
+      if (parts.length !== 2 || !parts[0] || !parts[1]) {
+        throw new PresetsHistoryArgError(
+          `--compare must be a window like 14d..7d, got "${value}".`,
+        );
+      }
+      const from = parseBound(parts[0], now, "--compare");
+      const to = parseBound(parts[1], now, "--compare");
+      if (to < from) throw new PresetsHistoryArgError("--compare must start before it ends.");
+      compare = { since: from, until: to };
     } else if (arg.startsWith("-")) {
       throw new PresetsHistoryArgError(`unexpected flag "${arg}".`);
     } else if (path !== null) {
@@ -590,7 +758,30 @@ export function parsePresetHistoryArgs(
   if (csvPath !== null && timelinePath !== null) {
     throw new PresetsHistoryArgError("--csv and --timeline are different exports; pass one.");
   }
-  return { path, since, until, limit, failUnder, csvPath, timelinePath };
+  if (compare !== null) {
+    if (csvPath !== null || timelinePath !== null) {
+      throw new PresetsHistoryArgError("--compare cannot be combined with --csv or --timeline.");
+    }
+    if (failUnder !== null) {
+      throw new PresetsHistoryArgError(
+        "--compare cannot be combined with --fail-under; the gate judges one window.",
+      );
+    }
+    if (limit !== null) {
+      throw new PresetsHistoryArgError("--compare cannot be combined with --limit.");
+    }
+    // The two windows have to be tellable apart, so the current one needs a
+    // start and the earlier one has to end before it.
+    if (since === null) {
+      throw new PresetsHistoryArgError(
+        "--compare needs --since to mark where the current window starts.",
+      );
+    }
+    if (compare.until > since) {
+      throw new PresetsHistoryArgError("--compare must end at or before --since.");
+    }
+  }
+  return { path, since, until, limit, failUnder, csvPath, timelinePath, compare };
 }
 
 export type { PresetsReport, PresetEndpoint };

@@ -367,7 +367,9 @@ export type { PresetsSummary } from "./presets-summary.ts";
 export {
   PresetsHistoryArgError,
   appendPresetHistory,
+  comparePresetHistory,
   formatPresetHistory,
+  formatPresetHistoryComparison,
   parsePresetHistoryArgs,
   presetHistoryCsv,
   presetHistoryTimelineCsv,
@@ -383,7 +385,10 @@ export {
 export type {
   PresetHistoryRecord,
   PresetHistoryRow,
+  PresetUptimeChange,
   PresetsGateReport,
+  PresetsHistoryComparison,
   PresetsHistorySummary,
+  PresetsHistoryWindow,
   UptimeShortfall,
 } from "./presets-history.ts";

@@ -174,7 +174,9 @@ import {
 import {
   PresetsHistoryArgError,
   appendPresetHistory,
+  comparePresetHistory,
   formatPresetHistory,
+  formatPresetHistoryComparison,
   parsePresetHistoryArgs,
   presetHistoryCsv,
   presetHistoryTimelineCsv,
@@ -299,12 +301,21 @@ if (isPresetHistory) {
   let historyPath = "";
   try {
     const args = parsePresetHistoryArgs(flags);
-    historyPath = args.path;    const records = readPresetHistory(historyPath);
+    historyPath = args.path;
+    const records = readPresetHistory(historyPath);
     const summary = summarizePresetHistory(records, {
       since: args.since,
       until: args.until,
       limit: args.limit,
     });
+    const comparison =
+      args.compare === null
+        ? null
+        : comparePresetHistory(
+            records,
+            { since: args.since, until: args.until },
+            args.compare,
+          );
 
     if (args.timelinePath !== null) {
       const csv = presetHistoryTimelineCsv(records, {
@@ -330,9 +341,13 @@ if (isPresetHistory) {
       }
     } else {
       console.log(
-        asJson
-          ? JSON.stringify(toPresetHistoryJson(summary), null, 2)
-          : formatPresetHistory(summary),
+        comparison === null
+          ? asJson
+            ? JSON.stringify(toPresetHistoryJson(summary), null, 2)
+            : formatPresetHistory(summary)
+          : asJson
+            ? JSON.stringify(comparison, null, 2)
+            : formatPresetHistoryComparison(comparison),
       );
     }
     // --fail-under is a CI gate over the selected window, not a display option:

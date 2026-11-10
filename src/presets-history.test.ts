@@ -7,7 +7,9 @@ import { test } from "node:test";
 import {
   PresetsHistoryArgError,
   appendPresetHistory,
+  comparePresetHistory,
   formatPresetHistory,
+  formatPresetHistoryComparison,
   parsePresetHistoryArgs,
   presetHistoryCsv,
   presetHistoryTimelineCsv,
@@ -184,6 +186,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     failUnder: null,
     csvPath: null,
     timelinePath: null,
+    compare: null,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--json"]), {
     path: "history.jsonl",
@@ -193,6 +196,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     failUnder: null,
     csvPath: null,
     timelinePath: null,
+    compare: null,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--csv", "-"]), {
     path: "history.jsonl",
@@ -202,6 +206,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     failUnder: null,
     csvPath: "-",
     timelinePath: null,
+    compare: null,
   });
   assert.equal(parsePresetHistoryArgs(["h.jsonl", "--timeline", "-"]).timelinePath, "-");
 
@@ -239,6 +244,7 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
     failUnder: null,
     csvPath: null,
     timelinePath: null,
+    compare: null,
   });
 
   for (const argv of [
@@ -272,12 +278,61 @@ test("parses --until as a closed end, and rejects an inverted window", () => {
     failUnder: null,
     csvPath: null,
     timelinePath: null,
+    compare: null,
   });
 
   for (const argv of [
     ["h.jsonl", "--until", "soon"],
     ["h.jsonl", "--until"],
     ["h.jsonl", "--since", "1d", "--until", "2d"],
+  ]) {
+    assert.throws(
+      () => parsePresetHistoryArgs(argv, now),
+      (error: unknown) => error instanceof PresetsHistoryArgError,
+      argv.join(" "),
+    );
+  }
+});
+
+test("parses --compare as an earlier window that ends before --since", () => {
+  const now = Date.parse("2026-11-10T12:00:00Z");
+  const day = 86_400_000;
+
+  assert.deepEqual(
+    parsePresetHistoryArgs([
+      "h.jsonl",
+      "--since",
+      "7d",
+      "--compare",
+      "14d..7d",
+    ], now).compare,
+    { since: now - 14 * day, until: now - 7 * day },
+  );
+  assert.deepEqual(
+    parsePresetHistoryArgs(
+      ["h.jsonl", "--since=2026-11-08T00:00:00Z", "--compare=2026-11-01T00:00:00Z..2026-11-08T00:00:00Z"],
+      now,
+    ).compare,
+    {
+      since: Date.parse("2026-11-01T00:00:00Z"),
+      until: Date.parse("2026-11-08T00:00:00Z"),
+    },
+  );
+
+  for (const argv of [
+    ["h.jsonl", "--compare", "14d"],
+    ["h.jsonl", "--compare", "14d.."],
+    ["h.jsonl", "--compare", "..7d"],
+    ["h.jsonl", "--compare", "14d..7d..2d"],
+    ["h.jsonl", "--compare", "soon..7d"],
+    ["h.jsonl", "--compare"],
+    ["h.jsonl", "--compare", "7d..14d"],
+    ["h.jsonl", "--compare", "14d..7d"],
+    ["h.jsonl", "--since", "8d", "--compare", "14d..7d"],
+    ["h.jsonl", "--since", "7d", "--compare", "14d..7d", "--limit", "2"],
+    ["h.jsonl", "--since", "7d", "--compare", "14d..7d", "--fail-under", "90"],
+    ["h.jsonl", "--since", "7d", "--compare", "14d..7d", "--csv", "-"],
+    ["h.jsonl", "--since", "7d", "--compare", "14d..7d", "--timeline", "-"],
   ]) {
     assert.throws(
       () => parsePresetHistoryArgs(argv, now),
@@ -516,6 +571,66 @@ test("formatPresetHistory explains an empty window", () => {
 
   assert.match(text, /no runs in this window \(1 recorded\)/);
   assert.match(text, /widen the window or raise --limit/);
+});
+
+test("--compare reads an earlier window beside the current one", () => {
+  const down = { ok: false, latencyMs: null, blockNumber: null, error: "down" };
+  const records = [
+    record("2026-11-01T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1)]),
+    record("2026-11-02T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1)]),
+    record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453), endpoint("ethereum", 1, down)]),
+    record("2026-11-09T06:17:00.000Z", [
+      endpoint("base", 8453),
+      endpoint("ethereum", 1, down),
+      endpoint("polygon", 137),
+    ]),
+  ];
+  const comparison = comparePresetHistory(
+    records,
+    { since: Date.parse("2026-11-08T00:00:00Z") },
+    { since: Date.parse("2026-11-01T00:00:00Z"), until: Date.parse("2026-11-03T00:00:00Z") },
+  );
+
+  assert.equal(comparison.before.runs, 2);
+  assert.equal(comparison.after.runs, 2);
+  assert.deepEqual(
+    comparison.presets.map((row) => [row.preset, row.deltaPct]),
+    [
+      ["ethereum", -100],
+      ["base", 0],
+      ["polygon", null],
+    ],
+  );
+  assert.equal(comparison.presets[0]?.before?.uptimePct, 100);
+  assert.equal(comparison.presets[0]?.after?.uptimePct, 0);
+  assert.equal(comparison.presets[2]?.before, null);
+  assert.equal(comparison.presets[2]?.after?.runs, 1);
+
+  const text = formatPresetHistoryComparison(comparison);
+  assert.match(text, /^lwc — preset health comparison/);
+  assert.match(text, /before\s+2 runs \(2026-11-01 06:17 → 2026-11-02 06:17\), uptime 100%/);
+  assert.match(text, /after\s+2 runs \(2026-11-08 06:17 → 2026-11-09 06:17\), uptime 0%/);
+  assert.match(text, /change\s+-100pp overall, 1 preset worse/);
+  assert.match(text, /preset\s+chain\s+before runs\s+before uptime\s+after runs\s+after uptime\s+change/);
+  assert.match(text, /ethereum\s+1\s+2\s+100%\s+2\s+0%\s+-100pp/);
+  assert.match(text, /base\s+8453\s+2\s+100%\s+2\s+100%\s+0pp/);
+  assert.match(text, /polygon\s+137\s+—\s+—\s+1\s+100%\s+—/);
+  // The regression is listed above the steady preset, not by name.
+  assert.ok(text.indexOf("ethereum") < text.indexOf("base"));
+});
+
+test("--compare explains an empty current window", () => {
+  const comparison = comparePresetHistory(
+    [record("2026-11-01T06:17:00.000Z", [endpoint("base", 8453)])],
+    { since: Date.parse("2026-11-09T00:00:00Z") },
+    { since: Date.parse("2026-11-01T00:00:00Z"), until: Date.parse("2026-11-02T00:00:00Z") },
+  );
+  const text = formatPresetHistoryComparison(comparison);
+
+  assert.equal(comparison.after.runs, 0);
+  assert.equal(comparison.before.runs, 1);
+  assert.match(text, /after\s+no runs \(1 recorded\)/);
+  assert.match(text, /no runs in the current window; widen the window and try again/);
 });
 
 test("presetHistoryCsv exports one row per preset with blanks for missing values", () => {
