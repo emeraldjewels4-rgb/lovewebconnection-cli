@@ -846,6 +846,7 @@ interface PresetFreshnessRow {
   age: string;
   presets: number;
   failed: number;
+  failovers: number;
 }
 
 /**
@@ -872,6 +873,7 @@ function freshnessRows(
       age: formatAge(Math.max(0, now - at)),
       presets: entry.endpoints.length,
       failed: entry.failed,
+      failovers: entry.endpoints.filter((endpoint) => endpoint.viaFallback).length,
     })),
     total: newestFirst.length,
     newestAge: formatAge(Math.max(0, now - newest.at)),
@@ -896,10 +898,11 @@ export function presetFreshnessMarkdown(
   const lines = [
     `### Preset freshness — ${staleAge === null ? "PASS" : "FAIL"}`,
     "",
-    "| Newest runs (UTC) | Age | Presets | Failed |",
-    "| --- | --- | --- | --- |",
+    "| Newest runs (UTC) | Age | Presets | Failed | Failovers |",
+    "| --- | --- | --- | --- | --- |",
     ...freshness.rows.map(
-      (row) => `| ${row.at} | ${row.age} | ${row.presets} | ${row.failed} |`,
+      (row) =>
+        `| ${row.at} | ${row.age} | ${row.presets} | ${row.failed} | ${row.failovers} |`,
     ),
     "",
     staleAge === null
@@ -975,7 +978,7 @@ export function formatPresetHistoryCheck(
       );
       for (const row of freshness.rows) {
         lines.push(
-          `    ${row.at.padEnd(17)}${row.age.padEnd(9)}${row.presets} preset${row.presets === 1 ? "" : "s"}, ${row.failed} failed`,
+          `    ${row.at.padEnd(17)}${row.age.padEnd(9)}${row.presets} preset${row.presets === 1 ? "" : "s"}, ${row.failed} failed, ${row.failovers} failover${row.failovers === 1 ? "" : "s"}`,
         );
       }
       if (freshness.rows.length < freshness.total) {

@@ -994,7 +994,10 @@ test("--freshness-rows sizes the report and belongs to the check", () => {
 
 test("presetFreshnessMarkdown tables the newest runs with their age", () => {
   const records = [
-    record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-08T06:17:00.000Z", [
+      endpoint("base", 8453),
+      endpoint("polygon", 137, { viaFallback: true }),
+    ]),
     record("2026-11-09T06:17:00.000Z", [
       endpoint("base", 8453),
       endpoint("ethereum", 1, {
@@ -1017,10 +1020,10 @@ test("presetFreshnessMarkdown tables the newest runs with their age", () => {
     [
       "### Preset freshness — FAIL",
       "",
-      "| Newest runs (UTC) | Age | Presets | Failed |",
-      "| --- | --- | --- | --- |",
-      "| 2026-11-09 06:17 | 1 day | 2 | 1 |",
-      "| 2026-11-08 06:17 | 2 days | 1 | 0 |",
+      "| Newest runs (UTC) | Age | Presets | Failed | Failovers |",
+      "| --- | --- | --- | --- | --- |",
+      "| 2026-11-09 06:17 | 1 day | 2 | 1 | 0 |",
+      "| 2026-11-08 06:17 | 2 days | 2 | 0 | 1 |",
       "",
       "Newest recorded run is 1 day old, past the 1 hour maximum, so the gate fails on freshness alone.",
     ].join("\n"),
@@ -1054,7 +1057,10 @@ test("presetFreshnessMarkdown caps the rows and reports a fresh file", () => {
 
 test("formatPresetHistoryCheck tables a stale file's newest runs", () => {
   const records = [
-    record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-08T06:17:00.000Z", [
+      endpoint("base", 8453),
+      endpoint("polygon", 137, { viaFallback: true }),
+    ]),
     record("2026-11-09T06:17:00.000Z", [
       endpoint("base", 8453),
       endpoint("ethereum", 1, {
@@ -1076,8 +1082,8 @@ test("formatPresetHistoryCheck tables a stale file's newest runs", () => {
   assert.match(text, /max age\s+1 hour/);
   assert.match(text, /newest\s+1 day old, past the 1 hour maximum\./);
   assert.match(text, /freshness\s+newest first/);
-  assert.match(text, /2026-11-09 06:17\s+1 day\s+2 presets, 1 failed/);
-  assert.match(text, /2026-11-08 06:17\s+2 days\s+1 preset, 0 failed/);
+  assert.ok(text.includes("2 presets, 1 failed, 0 failovers"));
+  assert.ok(text.includes("2 presets, 0 failed, 1 failover"));
   assert.doesNotMatch(text, /stale\s+newest run/);
 
   const brief = formatPresetHistoryCheck(check, records, { rows: 1 });

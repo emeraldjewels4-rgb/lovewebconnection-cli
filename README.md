@@ -220,8 +220,8 @@ refusal to merge rather than gate a file other than the one it names. Exit
 codes are 0 for a pass or skip, 1 for a failed gate and 2 for a misconfigured
 hook; `--json` writes one document to stdout in every outcome, with the
 explanation kept on stderr so stdout stays parseable. A stale history makes the
-failure report list its newest runs with their age, so the rows that are past
-the bound are visible instead of summarized in one line. The path and threshold
+failure report list its newest runs with their age, failures and failovers, so
+the rows that are past the bound are visible instead of summarized in one line. The path and threshold
 can come from `LWC_PRESETS_HISTORY`, `LWC_FAIL_UNDER`, `LWC_MAX_AGE` and
 `LWC_FRESHNESS_ROWS`, which is how the repository hook sets them:
 
@@ -268,7 +268,8 @@ the schedule red even when that morning's probe happened to answer. An empty or
 unreadable window fails too, rather than passing unchecked, and so does a file
 whose newest run is older than a week: `MAX_AGE` bounds that freshness the way
 `--since` bounds the window, the summary lists the newest runs with their age in
-a freshness table (`FRESHNESS_ROWS` sets how many rows, five by default), and
+a freshness table with each run's preset, failed and failover counts
+(`FRESHNESS_ROWS` sets how many rows, five by default), and
 the run log annotates the age, so a schedule that stopped writing cannot keep
 passing on last week's evidence. Pass `--max-age` or `--freshness-rows` directly
 to `scripts/presets-gate.mjs` to tighten the bound or change the table. Each run also
