@@ -3,9 +3,11 @@
 // to the job summary. It reuses the same summary functions as
 // `lwc presets-history`, so the CI verdict cannot drift from the CLI view.
 //
-// usage: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --compare 14d..7d --fail-under 95
+// usage: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --max-age 7d --compare 14d..7d --fail-under 95
 // Writes to $GITHUB_STEP_SUMMARY when set, otherwise prints to stdout.
-// Exits 1 when a preset is below the threshold or the window cannot be checked.
+// Exits 1 when a preset is below the threshold, the newest recorded run is
+// older than --max-age (or MAX_AGE, one week by default), or the window cannot
+// be checked: a healthy file nobody appends to proves nothing about today.
 // --compare adds the earlier window to the summary; the verdict still comes from
 // the current one, so a week-over-week delta is published without weakening the gate.
 import { appendFileSync } from "node:fs";
@@ -13,9 +15,12 @@ import { appendFileSync } from "node:fs";
 import {
   PresetsHistoryArgError,
   comparePresetHistory,
+  parseMaxAgeMs,
   parsePresetHistoryArgs,
   parseRetentionMs,
   presetComparisonMarkdown,
+  presetHistoryCheck,
+  presetHistoryFailureReasons,
   presetRegressionWarnings,
   providerRegressionWarnings,
   readPresetHistoryFile,
@@ -38,14 +43,39 @@ function write(line) {
 function usage(message) {
   console.error(`usage error: ${message}`);
   console.error(
-    "  example: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --compare 14d..7d --fail-under 95",
+    "  example: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --max-age 7d --compare 14d..7d --fail-under 95",
   );
   process.exit(1);
 }
 
+// --max-age is a gate bound rather than a history filter, so the shared parser
+// rejects it without --check. Lift it out here, as the hook does, and hand it
+// to the check that produces the verdict.
+const argv = process.argv.slice(2);
+let maxAgeRaw = process.env.MAX_AGE?.trim() || "7d";
+const gateArgv = [];
+for (let index = 0; index < argv.length; index += 1) {
+  const arg = argv[index] ?? "";
+  if (arg === "--max-age" || arg.startsWith("--max-age=")) {
+    maxAgeRaw = arg.startsWith("--max-age=")
+      ? arg.slice("--max-age=".length)
+      : argv[++index] ?? "";
+  } else {
+    gateArgv.push(arg);
+  }
+}
+
+let maxAgeMs;
+try {
+  maxAgeMs = parseMaxAgeMs(maxAgeRaw);
+} catch (error) {
+  if (error instanceof PresetsHistoryArgError) usage(error.message);
+  throw error;
+}
+
 let args;
 try {
-  args = parsePresetHistoryArgs(process.argv.slice(2));
+  args = parsePresetHistoryArgs(gateArgv);
 } catch (error) {
   if (error instanceof PresetsHistoryArgError) usage(error.message);
   throw error;
@@ -85,6 +115,7 @@ const summary = summarizePresetHistory(
   { since: args.since, until: args.until, limit: args.limit },
   { retainMs },
 );
+const check = presetHistoryCheck(args.path, summary, args.failUnder, { maxAgeMs });
 const gate = summarizePresetGate(summary, args.failUnder);
 const comparison =
   args.compare === null
@@ -92,8 +123,21 @@ const comparison =
     : comparePresetHistory(records, { since: args.since, until: args.until }, args.compare, {
         retainMs,
       });
+const staleNote =
+  check.stale === null || check.maxAge === null
+    ? null
+    : `> **Stale history** — newest run ${check.stale.newest} is ${check.stale.age} old, past the ${check.maxAge.label} maximum, so the table below covers a window that has stopped growing.`;
+// The uptime table can pass while the file is stale, so the verdict line is
+// repeated after it: the step fails on freshness alone, and the summary has to
+// say why rather than show only the PASS.
+const staleVerdict =
+  check.stale === null || check.maxAge === null
+    ? null
+    : `**FAIL** — newest run ${check.stale.newest} is ${check.stale.age} old, past the ${check.maxAge.label} maximum, so the gate fails on freshness even though the uptime table is healthy.`;
 const markdown = [
+  staleNote,
   gate.markdown,
+  staleVerdict,
   comparison === null ? null : presetComparisonMarkdown(comparison, "Preset week over week"),
 ]
   .filter((part) => part !== null)
@@ -126,14 +170,11 @@ if (comparison !== null) {
   }
 }
 
-for (const row of gate.shortfalls) {
-  const detail = `${row.preset} uptime ${row.uptimePct}% over ${row.runs} run${row.runs === 1 ? "" : "s"} is below ${args.failUnder}%`;
-  console.log(`::error title=Preset uptime gate::${escapeAnnotation(detail)}`);
-}
-
-if (summary.runs === 0) {
-  console.log("::error title=Preset uptime gate::no runs in the window to check");
+// The same reasons the pre-commit hook prints, as annotations: a stale file and
+// an empty window are gate failures too, not just a low uptime.
+for (const reason of presetHistoryFailureReasons(check)) {
+  console.log(`::error title=Preset uptime gate::${escapeAnnotation(reason)}`);
 }
 
 // The verdict is the whole point of the step, so a shortfall fails the job.
-process.exit(gate.passed ? 0 : 1);
+process.exit(check.gate.passed ? 0 : 1);

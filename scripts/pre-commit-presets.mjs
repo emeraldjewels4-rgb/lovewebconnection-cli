@@ -29,6 +29,7 @@ import {
   parseMaxAgeMs,
   parseRetentionMs,
   presetHistoryCheck,
+  presetHistoryFailureReasons,
   readPresetHistoryFile,
   summarizePresetHistory,
 } from "../src/presets-history.ts";
@@ -160,24 +161,7 @@ if (check.gate.passed) process.exit(0);
 
 if (json) {
   // The report stays on stderr so stdout is still a single parsed document.
-  const reasons = [];
-  if (check.stale !== null) {
-    reasons.push(
-      `newest run ${check.stale.newest} is ${check.stale.age} old, past the ${check.maxAge?.label ?? "maximum"} maximum.`,
-    );
-  }
-  if (check.runs === 0) {
-    reasons.push(
-      `no runs in the window (${check.coverage.recorded} recorded), so ${check.gate.threshold}% cannot be verified.`,
-    );
-  } else {
-    for (const row of check.gate.shortfalls) {
-      reasons.push(
-        `${row.preset} uptime ${row.uptimePct}% over ${row.runs} run${row.runs === 1 ? "" : "s"} is below ${check.gate.threshold}%.`,
-      );
-    }
-  }
-  for (const line of reasons) console.error(`error: ${line}`);
+  for (const line of presetHistoryFailureReasons(check)) console.error(`error: ${line}`);
 } else {
   console.error(formatPresetHistoryCheck(check));
 }

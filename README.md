@@ -262,7 +262,12 @@ last week of history against `--fail-under` (95% by default, settable when
 starting the workflow by hand), writes a PASS/FAIL section naming any preset
 below it, and fails the job — so a provider that has been flaky all week turns
 the schedule red even when that morning's probe happened to answer. An empty or
-unreadable window fails too, rather than passing unchecked. Each run also
+unreadable window fails too, rather than passing unchecked, and so does a file
+whose newest run is older than a week: `MAX_AGE` bounds that freshness the way
+`--since` bounds the window, the summary calls out the stale history above the
+table, and the run log annotates the age, so a schedule that stopped writing
+cannot keep passing on last week's evidence. Pass `--max-age` directly to
+`scripts/presets-gate.mjs` to tighten or widen the bound. Each run also
 publishes a week-over-week comparison: the same presets over the seven days
 before the gate's window, with the percentage-point change per preset and the
 regressions called out in the headline, so a provider switch shows whether it

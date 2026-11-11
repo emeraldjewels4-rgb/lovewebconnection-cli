@@ -814,6 +814,33 @@ export function presetHistoryCheck(
   };
 }
 
+/**
+ * One line per reason the check failed, in the order the report reads: a stale
+ * file first, then an empty window, then each preset below the threshold. The
+ * pre-commit hook prints these and CI annotates them, so both say the same
+ * thing without copying the wording.
+ */
+export function presetHistoryFailureReasons(check: PresetsHistoryCheck): string[] {
+  const reasons: string[] = [];
+  if (check.stale !== null) {
+    reasons.push(
+      `newest run ${check.stale.newest} is ${check.stale.age} old, past the ${check.maxAge?.label ?? "maximum"} maximum.`,
+    );
+  }
+  if (check.runs === 0) {
+    reasons.push(
+      `no runs in the window (${check.coverage.recorded} recorded), so ${check.gate.threshold}% cannot be verified.`,
+    );
+  } else {
+    for (const row of check.gate.shortfalls) {
+      reasons.push(
+        `${row.preset} uptime ${row.uptimePct}% over ${row.runs} run${row.runs === 1 ? "" : "s"} is below ${check.gate.threshold}%.`,
+      );
+    }
+  }
+  return reasons;
+}
+
 /** Render the local check as one aligned pass, ending in the verdict. */
 export function formatPresetHistoryCheck(check: PresetsHistoryCheck): string {
   const field = (label: string, value: string): string => `  ${label.padEnd(9)}${value}`;

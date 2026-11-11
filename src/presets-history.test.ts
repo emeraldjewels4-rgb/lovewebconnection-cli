@@ -19,6 +19,7 @@ import {
   parsePresetHistoryArgs,
   presetHistoryCheck,
   presetHistoryCsv,
+  presetHistoryFailureReasons,
   presetComparisonMarkdown,
   presetHistoryTimelineCsv,
   presetRegressionWarnings,
@@ -903,6 +904,55 @@ test("--check needs a threshold and takes no export or comparison", () => {
       ),
     /--check reports one window/,
   );
+});
+
+test("failure reasons name a stale file with nothing else wrong", () => {
+  const summary = summarizePresetHistory(
+    [record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)])],
+    {},
+  );
+  const check = presetHistoryCheck("h.jsonl", summary, 95, {
+    maxAgeMs: 60 * 60 * 1000,
+    now: Date.parse("2026-11-10T06:17:00Z"),
+  });
+
+  assert.deepEqual(presetHistoryFailureReasons(check), [
+    "newest run 2026-11-08T06:17:00.000Z is 2 days old, past the 1 hour maximum.",
+  ]);
+});
+
+test("failure reasons keep a stale file beside its shortfall", () => {
+  const down = { ok: false, latencyMs: null, blockNumber: null, error: "down" };
+  const summary = summarizePresetHistory(
+    [
+      record("2026-11-08T06:17:00.000Z", [
+        endpoint("base", 8453),
+        endpoint("ethereum", 1, down),
+      ]),
+    ],
+    {},
+  );
+  const check = presetHistoryCheck("h.jsonl", summary, 95, {
+    maxAgeMs: 1000,
+    now: Date.parse("2026-11-09T06:17:00Z"),
+  });
+
+  assert.deepEqual(presetHistoryFailureReasons(check), [
+    "newest run 2026-11-08T06:17:00.000Z is 1 day old, past the 1 second maximum.",
+    "ethereum uptime 0% over 1 run is below 95%.",
+  ]);
+});
+
+test("failure reasons explain an empty window without an age bound", () => {
+  const summary = summarizePresetHistory(
+    [record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)])],
+    { since: Date.parse("2026-11-09T00:00:00Z") },
+  );
+  const check = presetHistoryCheck("h.jsonl", summary, 95);
+
+  assert.deepEqual(presetHistoryFailureReasons(check), [
+    "no runs in the window (1 recorded), so 95% cannot be verified.",
+  ]);
 });
 
 test("--max-age fails the gate when the newest run is too old", () => {

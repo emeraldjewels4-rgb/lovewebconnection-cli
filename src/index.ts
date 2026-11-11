@@ -377,6 +377,7 @@ export {
   parseRetentionMs,
   presetHistoryCheck,
   presetHistoryCsv,
+  presetHistoryFailureReasons,
   presetHistoryTimelineCsv,
   presetRegressionWarnings,
   presetsBelowUptime,
