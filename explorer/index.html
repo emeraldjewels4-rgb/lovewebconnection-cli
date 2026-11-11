@@ -15,8 +15,8 @@
     <h1>lwc <span>explorer</span></h1>
     <p class="lede">
       The six chains built into <span class="mono">lovewebconnection</span>, probed live on their
-      primary and fallback endpoints, with block, address and transaction lookups. Nothing here
-      holds a key, signs, or moves funds.
+      primary and fallback endpoints, with block, address, transaction, token and contract
+      lookups. Nothing here holds a key, signs, or moves funds.
     </p>
   </header>
 
@@ -52,8 +52,19 @@
         <span>Chain</span>
         <select id="chain" required></select>
       </label>
+      <label class="field">
+        <span>Look up</span>
+        <select id="kind">
+          <option value="auto">Auto-detect</option>
+          <option value="block">Block</option>
+          <option value="address">Address</option>
+          <option value="transaction">Transaction</option>
+          <option value="token">Token</option>
+          <option value="contract">Contract</option>
+        </select>
+      </label>
       <label class="field grow">
-        <span>Block number, address or transaction hash</span>
+        <span id="query-label">Block number, address or transaction hash</span>
         <input id="query" placeholder="19000000, 0x… address, 0x… 64-byte hash" spellcheck="false" />
       </label>
       <button type="submit" id="go">Look up</button>
@@ -71,6 +82,6 @@
     <p><a href="/">Dashboard</a> · <a href="/scan/">Polygon scan</a></p>
   </footer>
 </main>
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=2"></script>
 </body>
 </html>

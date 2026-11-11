@@ -9,3 +9,12 @@ Options -Indexes
 <IfModule mod_mime.c>
   AddType application/json .json
 </IfModule>
+
+# The files here are not content-hashed, so they must be revalidated. The parent
+# site marks every .js and .css immutable for a year, which would pin a stale
+# explorer in a browser after a redeploy.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(js|css|json)$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+</IfModule>

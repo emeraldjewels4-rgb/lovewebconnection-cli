@@ -20,6 +20,7 @@ const READ_METHODS = [
     'eth_getBalance',
     'eth_getTransactionCount',
     'eth_getCode',
+    'eth_getStorageAt',
     'eth_getBlockByNumber',
     'eth_getBlockByHash',
     'eth_getTransactionByHash',

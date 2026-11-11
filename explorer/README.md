@@ -2,7 +2,7 @@
 
 A static, read-only explorer for the six chains built into
 `lovewebconnection`: live preset health on the primary and fallback endpoints,
-plus block, address and transaction lookups.
+plus block, address, transaction, token and contract lookups.
 
 Nothing here holds a key, signs, or sends a transaction. `rpc.php` accepts only
 a fixed list of `eth_*`/`net_version` read methods and forwards them to the
@@ -14,7 +14,7 @@ endpoints in `presets.json`, primary first, then fallback.
 | --- | --- |
 | `index.html` | The page shell. |
 | `style.css` | Styles, matching the dark web9999 dashboard. |
-| `app.js` | Probes the presets, renders the table, runs lookups. |
+| `app.js` | Probes the presets, renders the table, runs lookups (tokens read `name`, `symbol`, `decimals` and `totalSupply`; contracts read code and the EIP-1967 slots). |
 | `presets.json` | Generated from `CHAIN_PRESETS`; do not edit by hand. |
 | `rpc.php` | Same-origin read-only JSON-RPC proxy with failover. |
 | `.htaccess` | No directory listing, basic security headers. |
@@ -48,6 +48,10 @@ endpoint that sends no CORS header.
    `.htaccess` (turn on **Settings → Show Hidden Files** so `.htaccess` is
    visible).
 4. Open `https://<your-domain>/explorer/`.
+
+`index.html` loads `app.js?v=2`. The parent site marks `.js` files immutable for
+a year, so bump that number whenever `app.js` changes; otherwise a browser that
+loaded the old script keeps running it.
 
 If the page says `presets.json` cannot be loaded, confirm it was uploaded as
 `application/json` and not HTML. If `rpc.php` downloads instead of running,

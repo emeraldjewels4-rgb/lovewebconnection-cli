@@ -11,6 +11,30 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
 const QUANTITY = /^(0x[0-9a-fA-F]+|\d+)$/;
 
+/** EIP-1967 storage slots: implementation, admin and beacon. */
+const EIP1967 = {
+  implementation: "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+  admin: "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103",
+  beacon: "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50",
+};
+
+/** ERC-20 selectors, read through eth_call. */
+const ERC20 = {
+  name: "0x06fdde03",
+  symbol: "0x95d89b41",
+  decimals: "0x313ce567",
+  totalSupply: "0x18160ddd",
+};
+
+const KIND_HINTS = {
+  auto: ["Block number, address or transaction hash", "19000000, 0x… address, 0x… 64-byte hash"],
+  block: ["Block number", "19000000 or 0x122a3c0"],
+  address: ["Address", "0x… 20-byte address"],
+  transaction: ["Transaction hash", "0x… 32-byte hash"],
+  token: ["Token contract", "0x… ERC-20 contract address"],
+  contract: ["Contract address", "0x… contract address"],
+};
+
 function bigint(value) {
   try {
     return BigInt(value);
@@ -35,6 +59,63 @@ function formatUnits(value, decimals = 18, maxFraction = 6) {
 function short(value, keep = 8) {
   if (typeof value !== "string") return String(value);
   return value.length > keep * 2 + 2 ? `${value.slice(0, keep + 2)}…${value.slice(-keep)}` : value;
+}
+
+function decodeUint(hex) {
+  if (typeof hex !== "string" || !hex.startsWith("0x") || hex.length < 66) return null;
+  return bigint(hex.slice(0, 66));
+}
+
+/** An ABI string, including the bytes32 form older tokens use for name and symbol. */
+function decodeAbiText(hex) {
+  if (typeof hex !== "string" || hex === "0x") return null;
+  const body = hex.slice(2);
+  try {
+    if (body.length === 64) {
+      const bytes = new Uint8Array(body.match(/../g).map((pair) => parseInt(pair, 16)));
+      const end = bytes.indexOf(0);
+      return new TextDecoder().decode(bytes.subarray(0, end === -1 ? bytes.length : end)).trim() || null;
+    }
+    if (body.length >= 128) {
+      // Dynamic string: offset word, length word, then the bytes.
+      const offset = Number(bigint("0x" + body.slice(0, 64))) * 2;
+      const length = Number(bigint("0x" + body.slice(offset, offset + 64)));
+      const data = body.slice(offset + 64, offset + 64 + length * 2);
+      if (data.length < length * 2) return null;
+      const bytes = new Uint8Array(data.match(/../g).map((pair) => parseInt(pair, 16)));
+      return new TextDecoder().decode(bytes).replace(/\0+$/, "").trim() || null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** The address held in a 32-byte storage slot, or null when the slot is empty. */
+function slotAddress(hex) {
+  if (typeof hex !== "string" || hex === "0x" || /^0x0+$/.test(hex)) return null;
+  const address = "0x" + hex.slice(2).padStart(64, "0").slice(-40);
+  return /^0x0{40}$/.test(address) ? null : address;
+}
+
+/** EIP-1167 runtime: 10-byte prefix, the target address, 15-byte suffix. */
+function minimalProxyTarget(code) {
+  if (typeof code !== "string") return null;
+  const body = code.slice(2).toLowerCase();
+  if (
+    body.length !== 90 ||
+    !body.startsWith("363d3d373d3d3d363d73") ||
+    !body.endsWith("5af43d82803e903d91602b57fd5bf3")
+  ) {
+    return null;
+  }
+  return "0x" + body.slice(20, 60);
+}
+
+function syncKind() {
+  const [label, placeholder] = KIND_HINTS[$("kind").value] || KIND_HINTS.auto;
+  $("query-label").textContent = label;
+  $("query").placeholder = placeholder;
 }
 
 function hostOf(url) {
@@ -319,6 +400,74 @@ async function showTransaction(chain, hash) {
   );
 }
 
+async function showToken(chain, address) {
+  const call = (data) =>
+    rpc(chain, "eth_call", [{ to: address, data }, "latest"])
+      .then((answer) => answer.result)
+      .catch(() => null);
+  const [code, name, symbol, decimals, supply] = await Promise.all([
+    rpc(chain, "eth_getCode", [address, "latest"]).then((answer) => answer.result).catch(() => "0x"),
+    call(ERC20.name),
+    call(ERC20.symbol),
+    call(ERC20.decimals),
+    call(ERC20.totalSupply),
+  ]);
+
+  const bytes = typeof code === "string" ? Math.max(0, (code.length - 2) / 2) : 0;
+  if (bytes === 0) throw new Error(`no contract at ${short(address, 8)} on ${chain.name}`);
+
+  const nameText = decodeAbiText(name);
+  const symbolText = decodeAbiText(symbol);
+  const decimalsValue = decodeUint(decimals);
+  const supplyValue = decodeUint(supply);
+  if (nameText === null && symbolText === null && supplyValue === null) {
+    throw new Error("that contract answers none of name, symbol or totalSupply; it is not an ERC-20 token");
+  }
+
+  const resolvedDecimals =
+    decimalsValue === null ? 18 : Math.min(36, Math.max(0, Number(decimalsValue)));
+  const title = symbolText ? `${symbolText}${nameText ? ` · ${nameText}` : ""}` : nameText || "Token";
+  renderResult(title, `${chain.name} · ERC-20`, [
+    ["Name", nameText],
+    ["Symbol", symbolText],
+    ["Decimals", decimalsValue === null ? "18 (method missing)" : String(resolvedDecimals)],
+    ["Total supply", supplyValue === null ? "—" : `${formatUnits(supplyValue, resolvedDecimals)} ${symbolText || ""}`.trim()],
+    ["Contract", `${bytes.toLocaleString("en-US")} bytes of code`],
+    ["Address", address, true],
+  ]);
+}
+
+async function showContract(chain, address) {
+  const code = await rpc(chain, "eth_getCode", [address, "latest"]);
+  const bytes = typeof code.result === "string" ? Math.max(0, (code.result.length - 2) / 2) : 0;
+  if (bytes === 0) throw new Error(`no contract at ${short(address, 8)} on ${chain.name}`);
+
+  const read = (slot) =>
+    rpc(chain, "eth_getStorageAt", [address, slot, "latest"])
+      .then((answer) => answer.result)
+      .catch(() => null);
+  const [implementation, admin, beacon] = await Promise.all([
+    read(EIP1967.implementation),
+    read(EIP1967.admin),
+    read(EIP1967.beacon),
+  ]);
+
+  const impl = slotAddress(implementation);
+  const beaconAddress = slotAddress(beacon);
+  const adminAddress = slotAddress(admin);
+  const minimal = minimalProxyTarget(code.result);
+  const rows = [
+    ["Code", `${bytes.toLocaleString("en-US")} bytes`],
+    ["Kind", impl ? "proxy (EIP-1967)" : minimal ? "minimal proxy (EIP-1167)" : "contract"],
+  ];
+  if (impl) rows.push(["Implementation", impl, true]);
+  if (beaconAddress) rows.push(["Beacon", beaconAddress, true]);
+  if (adminAddress) rows.push(["Proxy admin", adminAddress, true]);
+  if (minimal) rows.push(["Implementation", minimal, true]);
+  rows.push(["Address", address, true]);
+  renderResult(`Contract ${short(address, 8)}`, chain.name, rows);
+}
+
 async function submit(event) {
   event.preventDefault();
   const chain = state.chains.find((row) => row.name === $("chain").value);
@@ -331,22 +480,53 @@ async function submit(event) {
     return;
   }
   if (query === "") {
-    status.textContent = "enter a block number, address or transaction hash.";
+    status.textContent = "enter a value to look up.";
+    return;
+  }
+
+  let kind = $("kind").value;
+  if (kind === "auto") {
+    if (TX_HASH.test(query)) kind = "transaction";
+    else if (ADDRESS.test(query)) kind = "address";
+    else if (QUANTITY.test(query)) kind = "block";
+    else kind = "";
+  }
+
+  if (kind === "") {
+    status.className = "note bad";
+    status.textContent = "that is not a block number, 20-byte address or 32-byte transaction hash.";
+    return;
+  }
+  if (kind === "transaction" && !TX_HASH.test(query)) {
+    status.className = "note bad";
+    status.textContent = "a transaction hash is 32 bytes of hex.";
+    return;
+  }
+  if ((kind === "address" || kind === "token" || kind === "contract") && !ADDRESS.test(query)) {
+    status.className = "note bad";
+    status.textContent = "an address is 20 bytes of hex.";
+    return;
+  }
+  if (kind === "block" && !QUANTITY.test(query)) {
+    status.className = "note bad";
+    status.textContent = "a block is a decimal number or a 0x quantity.";
     return;
   }
 
   $("go").disabled = true;
   status.textContent = `reading ${chain.name}…`;
   try {
-    if (TX_HASH.test(query)) {
+    if (kind === "transaction") {
       await showTransaction(chain, query);
-    } else if (ADDRESS.test(query)) {
+    } else if (kind === "address") {
       await showAddress(chain, query);
-    } else if (QUANTITY.test(query)) {
+    } else if (kind === "token") {
+      await showToken(chain, query);
+    } else if (kind === "contract") {
+      await showContract(chain, query);
+    } else {
       const quantity = query.startsWith("0x") ? `0x${bigint(query).toString(16)}` : `0x${BigInt(query).toString(16)}`;
       await showBlock(chain, quantity);
-    } else {
-      throw new Error("that is not a block number, 20-byte address or 32-byte transaction hash.");
     }
     status.textContent = state.proxy ? "answered through rpc.php" : "answered by the endpoint directly";
   } catch (error) {
@@ -385,6 +565,8 @@ async function boot() {
   state.selected = state.chains[0].name;
   renderOptions();
   renderChains({});
+  $("kind").addEventListener("change", syncKind);
+  syncKind();
   $("lookup").addEventListener("submit", submit);
   await probeAll();
 }
