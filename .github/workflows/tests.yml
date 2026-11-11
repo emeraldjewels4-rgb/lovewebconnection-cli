@@ -50,5 +50,25 @@ jobs:
           test -f dist/cli.js
           test -f dist/index.d.ts
 
+      # The browser test skips itself when it cannot find a Chromium-family
+      # browser, so a broken image would pass the suite while checking nothing.
+      # Install Chrome explicitly and name it for the test.
+      - name: Install Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Check Chrome
+        run: '"$CHROME_PATH" --version'
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+
       - name: Run the test suite
-        run: npm test
+        run: |
+          set -euo pipefail
+          npm test | tee tests.log
+          # A skipped browser test still exits zero, so require a clean run.
+          grep -q "skipped 0" tests.log
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
