@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { closeSync, existsSync, openSync, readFileSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -274,9 +274,34 @@ function sendJson(response: ServerResponse, value: unknown): void {
   response.end(JSON.stringify(value));
 }
 
-function launchBrowser(executable: string): Promise<{ child: ChildProcess; wsUrl: string; profile: string }> {
+function stopBrowser(child: ChildProcess): void {
+  if (!child.pid) return;
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    return;
+  }
+  try {
+    // The detached browser leads its own process group, so this reaches helpers too.
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
+function launchBrowser(
+  executable: string,
+): Promise<{ child: ChildProcess; wsUrl: string; profile: string; logPath: string }> {
   return new Promise((resolve, reject) => {
-    const profile = join(tmpdir(), `lwc-explorer-${process.pid}-${Date.now()}`);
+    const stamp = `${process.pid}-${Date.now()}`;
+    const profile = join(tmpdir(), `lwc-explorer-${stamp}`);
+    const logPath = join(tmpdir(), `lwc-explorer-${stamp}.log`);
+    // A pipe is inherited by Chrome's helper processes and can outlive the test,
+    // keeping Node alive. A file carries the same DevTools line without a handle.
+    const logFd = openSync(logPath, "w");
     const child = spawn(
       executable,
       [
@@ -289,31 +314,49 @@ function launchBrowser(executable: string): Promise<{ child: ChildProcess; wsUrl
         `--user-data-dir=${profile}`,
         "about:blank",
       ],
-      { stdio: ["ignore", "ignore", "pipe"] },
+      {
+        stdio: ["ignore", "ignore", logFd],
+        detached: process.platform !== "win32",
+      },
     );
+    closeSync(logFd);
 
-    let output = "";
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error("the browser did not report a DevTools endpoint"));
-    }, 20_000);
+    let settled = false;
+    let wsUrl = "";
+    let timer: NodeJS.Timeout | null = null;
+    let poller: NodeJS.Timeout | null = null;
 
-    child.stderr?.on("data", (chunk: Buffer) => {
-      output += String(chunk);
-      const match = output.match(/DevTools listening on (ws:\/\/\S+)/);
-      if (match?.[1]) {
-        clearTimeout(timer);
-        resolve({ child, wsUrl: match[1], profile });
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (poller) clearInterval(poller);
+      if (error) {
+        stopBrowser(child);
+        reject(error);
+        return;
       }
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`the browser exited with code ${code}`));
-    });
+      resolve({ child, wsUrl, profile, logPath });
+    };
+
+    poller = setInterval(() => {
+      try {
+        const match = readFileSync(logPath, "utf8").match(/DevTools listening on (ws:\/\/\S+)/);
+        if (match?.[1]) {
+          wsUrl = match[1];
+          finish();
+        }
+      } catch {
+        // The log appears as soon as the browser starts writing.
+      }
+    }, 100);
+
+    timer = setTimeout(
+      () => finish(new Error("the browser did not report a DevTools endpoint")),
+      20_000,
+    );
+    child.on("error", (error) => finish(error));
+    child.on("exit", (code) => finish(new Error(`the browser exited with code ${code}`)));
   });
 }
 
@@ -387,17 +430,27 @@ test(
     });
 
     await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
+      const timer = setTimeout(() => reject(new Error("the stub server did not start")), 10_000);
+      server.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      server.listen(0, "127.0.0.1", () => {
+        clearTimeout(timer);
+        resolve();
+      });
     });
     const address = server.address();
     assert.ok(address && typeof address !== "string");
     const base = `http://127.0.0.1:${address.port}`;
 
-    const { child, wsUrl, profile } = await launchBrowser(browserPath!);
+    const { child, wsUrl, profile, logPath } = await launchBrowser(browserPath!);
     const port = new URL(wsUrl).port;
+    // Without a timeout this request can wait forever when Chrome accepts the
+    // DevTools port but has not finished starting its HTTP endpoint.
     const target = (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, {
       method: "PUT",
+      signal: AbortSignal.timeout(15_000),
     }).then((response) => response.json())) as { webSocketDebuggerUrl: string };
     const session = await connect(target.webSocketDebuggerUrl);
 
@@ -530,7 +583,9 @@ test(
       assert.doesNotMatch(finalText, /Block 19,000,000/, "the aborted block never rendered");
       assert.match(await session.evaluate<string>("location.search"), /type=address/);
 
-      const counts = (await fetch(`${base}/__stats`).then((response) => response.json())) as {
+      const counts = (await fetch(`${base}/__stats`, {
+        signal: AbortSignal.timeout(10_000),
+      }).then((response) => response.json())) as {
         delayed: number;
         aborted: number;
       };
@@ -602,7 +657,7 @@ test(
       }
     } finally {
       session.close();
-      child.kill();
+      stopBrowser(child);
       // Chrome can still hold keep-alive sockets to the stub server, which would
       // make server.close() wait forever; drop them and bound the wait.
       server.closeAllConnections();
@@ -610,6 +665,7 @@ test(
         new Promise<void>((resolve) => server.close(() => resolve())),
         sleep(5000),
       ]);
+      rmSync(logPath, { force: true });
       try {
         rmSync(profile, { recursive: true, force: true });
       } catch {
