@@ -7,6 +7,13 @@ const state = {
   proxy: null,
 };
 
+/** Incremented per lookup so a slow earlier response cannot render over a newer one. */
+let lookupSeq = 0;
+
+function isCurrentLookup(seq) {
+  return seq === lookupSeq;
+}
+
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
 const QUANTITY = /^(0x[0-9a-fA-F]+|\d+)$/;
@@ -369,9 +376,10 @@ function renderResult(title, tone, rows) {
   box.hidden = false;
 }
 
-async function showBlock(chain, quantity) {
+async function showBlock(chain, quantity, seq) {
   const block = await rpc(chain, "eth_getBlockByNumber", [quantity, false]);
   if (!block.result) throw new Error(`no block ${quantity} on ${chain.name}`);
+  if (!isCurrentLookup(seq)) return;
   const value = block.result;
   const transactions = Array.isArray(value.transactions) ? value.transactions : [];
   renderResult(
@@ -390,12 +398,13 @@ async function showBlock(chain, quantity) {
   );
 }
 
-async function showAddress(chain, address) {
+async function showAddress(chain, address, seq) {
   const [balance, nonce, code] = await Promise.all([
     rpc(chain, "eth_getBalance", [address, "latest"]),
     rpc(chain, "eth_getTransactionCount", [address, "latest"]),
     rpc(chain, "eth_getCode", [address, "latest"]),
   ]);
+  if (!isCurrentLookup(seq)) return;
   const bytes = typeof code.result === "string" ? Math.max(0, (code.result.length - 2) / 2) : 0;
   renderResult(`Address ${short(address, 10)}`, `${chain.name} · latest`, [
     ["Balance", `${formatUnits(bigint(balance.result))} ${chain.symbol}`],
@@ -405,7 +414,7 @@ async function showAddress(chain, address) {
   ]);
 }
 
-async function showTransaction(chain, hash) {
+async function showTransaction(chain, hash, seq) {
   const [transaction, receipt, head] = await Promise.all([
     rpc(chain, "eth_getTransactionByHash", [hash]),
     rpc(chain, "eth_getTransactionReceipt", [hash]),
@@ -413,6 +422,7 @@ async function showTransaction(chain, hash) {
   ]);
   const tx = transaction.result;
   if (!tx) throw new Error(`no transaction ${short(hash, 10)} on ${chain.name}`);
+  if (!isCurrentLookup(seq)) return;
 
   const gasPrice = tx.gasPrice ? bigint(tx.gasPrice) : null;
   const receiptValue = receipt.result;
@@ -440,7 +450,7 @@ async function showTransaction(chain, hash) {
   );
 }
 
-async function showToken(chain, address) {
+async function showToken(chain, address, seq) {
   const call = (data) =>
     rpc(chain, "eth_call", [{ to: address, data }, "latest"])
       .then((answer) => answer.result)
@@ -452,6 +462,7 @@ async function showToken(chain, address) {
     call(ERC20.decimals),
     call(ERC20.totalSupply),
   ]);
+  if (!isCurrentLookup(seq)) return;
 
   const bytes = typeof code === "string" ? Math.max(0, (code.length - 2) / 2) : 0;
   if (bytes === 0) throw new Error(`no contract at ${short(address, 8)} on ${chain.name}`);
@@ -477,8 +488,9 @@ async function showToken(chain, address) {
   ]);
 }
 
-async function showContract(chain, address) {
+async function showContract(chain, address, seq) {
   const code = await rpc(chain, "eth_getCode", [address, "latest"]);
+  if (!isCurrentLookup(seq)) return;
   const bytes = typeof code.result === "string" ? Math.max(0, (code.result.length - 2) / 2) : 0;
   if (bytes === 0) throw new Error(`no contract at ${short(address, 8)} on ${chain.name}`);
 
@@ -491,6 +503,7 @@ async function showContract(chain, address) {
     read(EIP1967.admin),
     read(EIP1967.beacon),
   ]);
+  if (!isCurrentLookup(seq)) return;
 
   const impl = slotAddress(implementation);
   const beaconAddress = slotAddress(beacon);
@@ -509,6 +522,7 @@ async function showContract(chain, address) {
 }
 
 async function performLookup({ push = true } = {}) {
+  const mine = ++lookupSeq;
   const chain = state.chains.find((row) => row.name === $("chain").value);
   const query = $("query").value.trim();
   const status = $("status");
@@ -557,24 +571,26 @@ async function performLookup({ push = true } = {}) {
   status.textContent = `reading ${chain.name}…`;
   try {
     if (kind === "transaction") {
-      await showTransaction(chain, query);
+      await showTransaction(chain, query, mine);
     } else if (kind === "address") {
-      await showAddress(chain, query);
+      await showAddress(chain, query, mine);
     } else if (kind === "token") {
-      await showToken(chain, query);
+      await showToken(chain, query, mine);
     } else if (kind === "contract") {
-      await showContract(chain, query);
+      await showContract(chain, query, mine);
     } else {
       const quantity = query.startsWith("0x") ? `0x${bigint(query).toString(16)}` : `0x${BigInt(query).toString(16)}`;
-      await showBlock(chain, quantity);
+      await showBlock(chain, quantity, mine);
     }
+    if (!isCurrentLookup(mine)) return;
     status.textContent = state.proxy ? "answered through rpc.php" : "answered by the endpoint directly";
   } catch (error) {
+    if (!isCurrentLookup(mine)) return;
     $("result").hidden = true;
     status.className = "note bad";
     status.textContent = error.message;
   } finally {
-    $("go").disabled = false;
+    if (isCurrentLookup(mine)) $("go").disabled = false;
   }
 }
 
