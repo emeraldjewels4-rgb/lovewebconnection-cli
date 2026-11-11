@@ -64,11 +64,21 @@ jobs:
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
 
+      # The browser test runs in its own step, because a stuck Chrome would hold
+      # the whole parallel suite open until the job timeout instead of failing.
       - name: Run the test suite
         run: |
           set -euo pipefail
           npm test | tee tests.log
-          # A skipped browser test still exits zero, so require a clean run.
-          grep -q "skipped 0" tests.log
+          # The browser test is skipped here and run below; nothing else may skip.
+          grep -q "skipped 1" tests.log
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          LWC_SKIP_BROWSER: "1"
+
+      - name: Browser test
+        run: |
+          set -euo pipefail
+          timeout 180 node --test src/explorer-browser.test.ts
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}

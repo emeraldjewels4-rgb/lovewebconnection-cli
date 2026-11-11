@@ -310,6 +310,7 @@ function launchBrowser(
         "--disable-dev-shm-usage",
         "--no-first-run",
         "--no-default-browser-check",
+        ...(process.env.CI ? ["--no-sandbox", "--disable-setuid-sandbox"] : []),
         "--remote-debugging-port=0",
         `--user-data-dir=${profile}`,
         "about:blank",
@@ -363,11 +364,24 @@ function launchBrowser(
 test(
   "explorer deep links, history and lookup cancellation work in a browser",
   {
-    skip: browserPath ? false : "no Chrome, Edge or Chromium found; set CHROME_PATH",
+    skip: process.env.LWC_SKIP_BROWSER
+      ? "run by the dedicated browser step"
+      : browserPath
+        ? false
+        : "no Chrome, Edge or Chromium found; set CHROME_PATH",
     timeout: 180_000,
   },
   async () => {
     assert.ok(browserPath);
+    // Stage markers make a CI hang locatable, and the watchdog makes sure a
+    // stuck browser cannot hold the job open past its own timeout.
+    const stage = (message: string) => console.log(`[explorer-browser] ${message}`);
+    const watchdog = setTimeout(() => {
+      console.error("[explorer-browser] watchdog expired");
+      process.exit(1);
+    }, 150_000);
+    watchdog.unref();
+    stage("starting");
     const explorerDir = fileURLToPath(new URL("../explorer/", import.meta.url));
     const presets = JSON.parse(
       await readFile(join(explorerDir, "presets.json"), "utf8"),
@@ -443,8 +457,10 @@ test(
     const address = server.address();
     assert.ok(address && typeof address !== "string");
     const base = `http://127.0.0.1:${address.port}`;
+    stage("stub server ready");
 
     const { child, wsUrl, profile, logPath } = await launchBrowser(browserPath!);
+    stage("browser launched");
     const port = new URL(wsUrl).port;
     // Without a timeout this request can wait forever when Chrome accepts the
     // DevTools port but has not finished starting its HTTP endpoint.
@@ -453,6 +469,7 @@ test(
       signal: AbortSignal.timeout(15_000),
     }).then((response) => response.json())) as { webSocketDebuggerUrl: string };
     const session = await connect(target.webSocketDebuggerUrl);
+    stage("devtools connected");
 
     try {
       await session.send("Page.enable");
@@ -465,6 +482,7 @@ test(
         session,
         `document.readyState === "complete" && document.getElementById("result").innerText.includes("USD Coin")`,
       );
+      stage("deep link rendered");
       const deepLink = await session.evaluate<{ kind: string; chain: string; search: string }>(
         `({ kind: document.getElementById("kind").value, chain: document.getElementById("chain").value, search: location.search })`,
       );
@@ -591,6 +609,7 @@ test(
       };
       assert.ok(counts.delayed >= 2, "the page requested the delayed block");
       assert.ok(counts.aborted >= 1, "the superseded block request was aborted at the server");
+      stage("cancellation verified");
 
       await session.evaluate(
         `(() => {
@@ -656,6 +675,8 @@ test(
         assert.equal(await session.evaluate<string>("location.search"), beforeValidation);
       }
     } finally {
+      stage("teardown");
+      clearTimeout(watchdog);
       session.close();
       stopBrowser(child);
       // Chrome can still hold keep-alive sockets to the stub server, which would
