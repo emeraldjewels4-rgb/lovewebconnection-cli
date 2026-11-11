@@ -373,6 +373,7 @@ export {
   formatPresetHistoryComparison,
   mergePresetHistory,
   parsePresetHistoryArgs,
+  parseFreshnessRows,
   parseMaxAgeMs,
   parseRetentionMs,
   presetFreshnessMarkdown,

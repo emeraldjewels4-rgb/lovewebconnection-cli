@@ -209,7 +209,8 @@ retention, which is anchored to the newest run so a paused schedule cannot prune
 its own evidence, age is measured against the clock, so it can only be used
 where `--check` asks for a gate. The pre-commit wrapper defaults it to
 `LWC_MAX_AGE` or `7d` and passes `--max-age` through, so a history that stopped
-updating cannot keep passing commits.
+updating cannot keep passing commits. The failure report lists the newest five
+runs; `--freshness-rows <n>` (or `LWC_FRESHNESS_ROWS`) changes how many.
 
 The same exit code is what a pre-commit hook blocks on, and
 `scripts/pre-commit-presets.mjs` wraps the check for git: silent when the gate
@@ -221,8 +222,8 @@ hook; `--json` writes one document to stdout in every outcome, with the
 explanation kept on stderr so stdout stays parseable. A stale history makes the
 failure report list its newest runs with their age, so the rows that are past
 the bound are visible instead of summarized in one line. The path and threshold
-can come from `LWC_PRESETS_HISTORY`, `LWC_FAIL_UNDER` and `LWC_MAX_AGE`, which
-is how the repository hook sets them:
+can come from `LWC_PRESETS_HISTORY`, `LWC_FAIL_UNDER`, `LWC_MAX_AGE` and
+`LWC_FRESHNESS_ROWS`, which is how the repository hook sets them:
 
 ```sh
 node scripts/pre-commit-presets.mjs --since 7d --fail-under 95

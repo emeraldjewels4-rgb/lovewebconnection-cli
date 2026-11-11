@@ -11,7 +11,8 @@
 //
 // --max-age (or LWC_MAX_AGE, one week by default) fails the gate when the
 // newest recorded run is older than that span: a healthy file nobody appends
-// to proves nothing about today.
+// to proves nothing about today. --freshness-rows (or LWC_FRESHNESS_ROWS, five
+// by default) sets how many runs the stale report lists.
 //
 // Exit codes are the contract a hook relies on:
 //   0  the gate passed, or there is no history yet to gate
@@ -40,7 +41,7 @@ const DEFAULT_THRESHOLD = "95";
 function usage(message) {
   console.error(`usage error: ${message}`);
   console.error(
-    "  example: node scripts/pre-commit-presets.mjs --history .lwc-history/presets.jsonl --since 7d --max-age 7d --fail-under 95",
+    "  example: node scripts/pre-commit-presets.mjs --history .lwc-history/presets.jsonl --since 7d --max-age 7d --freshness-rows 5 --fail-under 95",
   );
   process.exit(2);
 }
@@ -50,6 +51,7 @@ let thresholdRaw = process.env.LWC_FAIL_UNDER?.trim() || null;
 // A week matches the default window: a gate never vouches for evidence older
 // than the period it was asked to judge.
 let maxAgeRaw = process.env.LWC_MAX_AGE?.trim() || "7d";
+let rowsRaw = process.env.LWC_FRESHNESS_ROWS?.trim() || "5";
 let strictMissing = false;
 let json = false;
 const passthrough = [];
@@ -77,6 +79,10 @@ for (let index = 0; index < argv.length; index += 1) {
     maxAgeRaw = arg.startsWith("--max-age=")
       ? arg.slice("--max-age=".length)
       : readValue("--max-age");
+  } else if (arg === "--freshness-rows" || arg.startsWith("--freshness-rows=")) {
+    rowsRaw = arg.startsWith("--freshness-rows=")
+      ? arg.slice("--freshness-rows=".length)
+      : readValue("--freshness-rows");
   } else if (arg === "--fail-under" || arg.startsWith("--fail-under=")) {
     thresholdRaw = arg.startsWith("--fail-under=")
       ? arg.slice("--fail-under=".length)
@@ -99,6 +105,8 @@ try {
     ...passthrough,
     "--max-age",
     maxAgeRaw,
+    "--freshness-rows",
+    rowsRaw,
     "--check",
     "--fail-under",
     thresholdRaw || DEFAULT_THRESHOLD,
@@ -163,6 +171,6 @@ if (json) {
   // The report stays on stderr so stdout is still a single parsed document.
   for (const line of presetHistoryFailureReasons(check)) console.error(`error: ${line}`);
 } else {
-  console.error(formatPresetHistoryCheck(check, file.records));
+  console.error(formatPresetHistoryCheck(check, file.records, { rows: args.freshnessRows ?? 5 }));
 }
 process.exit(1);

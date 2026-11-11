@@ -253,6 +253,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     out: null,
     retain: null,
     maxAge: null,
+    freshnessRows: null,
     check: false,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--json"]), {
@@ -268,6 +269,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     out: null,
     retain: null,
     maxAge: null,
+    freshnessRows: null,
     check: false,
   });
   assert.deepEqual(parsePresetHistoryArgs(["history.jsonl", "--csv", "-"]), {
@@ -283,6 +285,7 @@ test("parsePresetHistoryArgs takes one path and rejects anything else", () => {
     out: null,
     retain: null,
     maxAge: null,
+    freshnessRows: null,
     check: false,
   });
   assert.equal(parsePresetHistoryArgs(["h.jsonl", "--timeline", "-"]).timelinePath, "-");
@@ -576,6 +579,7 @@ test("parses --since as an ISO time or a span, and --limit as a positive count",
     out: null,
     retain: null,
     maxAge: null,
+    freshnessRows: null,
     check: false,
   });
 
@@ -615,6 +619,7 @@ test("parses --until as a closed end, and rejects an inverted window", () => {
     out: null,
     retain: null,
     maxAge: null,
+    freshnessRows: null,
     check: false,
   });
 
@@ -956,6 +961,37 @@ test("failure reasons explain an empty window without an age bound", () => {
   ]);
 });
 
+test("--freshness-rows sizes the report and belongs to the check", () => {
+  const args = parsePresetHistoryArgs([
+    "h.jsonl",
+    "--check",
+    "--fail-under",
+    "95",
+    "--freshness-rows",
+    "2",
+  ]);
+  assert.equal(args.freshnessRows, 2);
+
+  for (const raw of ["0", "-1", "2.5", "two", ""]) {
+    assert.throws(
+      () =>
+        parsePresetHistoryArgs([
+          "h.jsonl",
+          "--check",
+          "--fail-under",
+          "95",
+          "--freshness-rows",
+          raw,
+        ]),
+      PresetsHistoryArgError,
+    );
+  }
+  assert.throws(
+    () => parsePresetHistoryArgs(["h.jsonl", "--freshness-rows", "2"]),
+    /--freshness-rows shapes the check report, so pass --check with it\./,
+  );
+});
+
 test("presetFreshnessMarkdown tables the newest runs with their age", () => {
   const records = [
     record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
@@ -1043,6 +1079,11 @@ test("formatPresetHistoryCheck tables a stale file's newest runs", () => {
   assert.match(text, /2026-11-09 06:17\s+1 day\s+2 presets, 1 failed/);
   assert.match(text, /2026-11-08 06:17\s+2 days\s+1 preset, 0 failed/);
   assert.doesNotMatch(text, /stale\s+newest run/);
+
+  const brief = formatPresetHistoryCheck(check, records, { rows: 1 });
+  assert.match(brief, /^    2026-11-09 06:17/m);
+  assert.doesNotMatch(brief, /^    2026-11-08 06:17/m);
+  assert.match(brief, /showing the newest 1 of 2 recorded runs/);
 });
 
 test("--max-age fails the gate when the newest run is too old", () => {

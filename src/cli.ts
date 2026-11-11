@@ -390,7 +390,9 @@ if (isPresetHistory) {
         maxAgeMs: args.maxAge,
       });
       console.log(
-        asJson ? JSON.stringify(check, null, 2) : formatPresetHistoryCheck(check, history),
+        asJson
+          ? JSON.stringify(check, null, 2)
+          : formatPresetHistoryCheck(check, history, { rows: args.freshnessRows ?? 5 }),
       );
       process.exit(check.gate.passed ? 0 : 1);
     }

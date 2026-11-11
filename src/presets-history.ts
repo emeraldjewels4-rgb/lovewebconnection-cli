@@ -917,11 +917,13 @@ export function presetFreshnessMarkdown(
 /**
  * Render the local check as one aligned pass, ending in the verdict. Passing the
  * records replaces the single stale line with the newest runs and their age, so
- * a stopped schedule is visible row by row; without them the summary line stays.
+ * a stopped schedule is visible row by row (five by default, or `rows`); without
+ * them the summary line stays.
  */
 export function formatPresetHistoryCheck(
   check: PresetsHistoryCheck,
   records?: readonly PresetHistoryRecord[],
+  options: { rows?: number } = {},
 ): string {
   const field = (label: string, value: string): string => `  ${label.padEnd(9)}${value}`;
   const { coverage, retention, gate, window: applied } = check;
@@ -957,6 +959,7 @@ export function formatPresetHistoryCheck(
     // age is the age the verdict used rather than a few milliseconds later.
     const freshness = freshnessRows(check, records ?? [], {
       now: Date.parse(check.stale.newest) + check.stale.ageMs,
+      limit: options.rows,
     });
     if (freshness === null) {
       lines.push(
@@ -1443,6 +1446,8 @@ export interface PresetsHistoryArgs {
   retain: number | null;
   /** Epoch-ms freshness bound from --max-age, or null to judge the gate on uptime alone. */
   maxAge: number | null;
+  /** Rows the stale report prints from --freshness-rows, or null for the default. */
+  freshnessRows: number | null;
   /** Report the file's coverage and retention beside the gate in one local pass. */
   check: boolean;
 }
@@ -1486,6 +1491,7 @@ export function parsePresetHistoryArgs(
   let out: string | null = null;
   let retain: number | null = null;
   let maxAge: number | null = null;
+  let freshnessRows: number | null = null;
   let check = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -1599,6 +1605,13 @@ export function parsePresetHistoryArgs(
       const value = inline ?? argv[index + 1] ?? "";
       if (inline === null) index += 1;
       maxAge = parseMaxAgeMs(value);
+    } else if (arg === "--freshness-rows" || arg.startsWith("--freshness-rows=")) {
+      const inline = arg.startsWith("--freshness-rows=")
+        ? arg.slice("--freshness-rows=".length)
+        : null;
+      const value = inline ?? argv[index + 1] ?? "";
+      if (inline === null) index += 1;
+      freshnessRows = parseFreshnessRows(value);
     } else if (arg.startsWith("-")) {
       throw new PresetsHistoryArgError(`unexpected flag "${arg}".`);
     } else if (path !== null) {
@@ -1627,6 +1640,11 @@ export function parsePresetHistoryArgs(
   }
   if (maxAge !== null && !check) {
     throw new PresetsHistoryArgError("--max-age bounds the gate, so pass --check with it.");
+  }
+  if (freshnessRows !== null && !check) {
+    throw new PresetsHistoryArgError(
+      "--freshness-rows shapes the check report, so pass --check with it.",
+    );
   }
   if (check) {
     // The check report is the output, so an export has nowhere to go, and a
@@ -1674,6 +1692,7 @@ export function parsePresetHistoryArgs(
     out,
     retain,
     maxAge,
+    freshnessRows,
     check,
   };
 }
@@ -1688,6 +1707,17 @@ export function parseRetentionMs(raw: string): number {
   }
   const unit = SINCE_UNITS_MS[match[2] as keyof typeof SINCE_UNITS_MS];
   return Number(match[1]) * unit;
+}
+
+/** A freshness row count as a positive whole number (`5`), for --freshness-rows. */
+export function parseFreshnessRows(raw: string): number {
+  const match = /^([1-9]\d*)$/.exec(raw.trim());
+  if (!match) {
+    throw new PresetsHistoryArgError(
+      `--freshness-rows must be a positive whole number like 5, got "${raw}".`,
+    );
+  }
+  return Number(match[1]);
 }
 
 /** A freshness bound as a positive span (`7d`), for --max-age. */
