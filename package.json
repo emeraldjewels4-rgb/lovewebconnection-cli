@@ -2,6 +2,7 @@
   "name": "lovewebconnection",
   "version": "0.2.0",
   "description": "lwc — read-only EVM chain connection kit: chain health, balances, scans, view calls, and watch-mode reliability checks",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "lwc": "./dist/cli.js"
