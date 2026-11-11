@@ -3,6 +3,12 @@
   "version": "0.2.0",
   "description": "lwc — read-only EVM chain connection kit: chain health, balances, scans, view calls, and watch-mode reliability checks",
   "license": "MIT",
+  "homepage": "https://github.com/emeraldjewels4-rgb/lovewebconnection-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emeraldjewels4-rgb/lovewebconnection-cli.git"
+  },
+  "author": "emeraldjewels4-rgb (https://github.com/emeraldjewels4-rgb)",
   "type": "module",
   "bin": {
     "lwc": "./dist/cli.js"
