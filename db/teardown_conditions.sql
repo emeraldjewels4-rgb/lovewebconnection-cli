@@ -56,7 +56,7 @@ END $$;
 -- 4. Optional: the source table as well.
 \if :{?drop_table}
   DROP TABLE IF EXISTS conditions;
-\endif;
+\endif
 
 -- 5. What is left behind.
 SELECT
