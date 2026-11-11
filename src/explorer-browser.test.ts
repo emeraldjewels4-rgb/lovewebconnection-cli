@@ -145,6 +145,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForStatus(session: Session, pattern: RegExp, timeoutMs = 5000): Promise<string> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const text = await session.evaluate<string>(`document.getElementById("status").textContent`);
+    if (pattern.test(text)) return text;
+    await sleep(50);
+  }
+  throw new Error(`status never matched ${pattern}`);
+}
+
 async function waitFor(session: Session, expression: string, timeoutMs = 10_000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -537,6 +547,33 @@ test(
       );
       assert.equal(await session.evaluate<boolean>(`document.getElementById("result").hidden`), true);
       assert.match(await session.evaluate<string>("location.search"), /type=contract/);
+
+      const beforeValidation = await session.evaluate<string>("location.search");
+      const submit = (kind: string, query: string) =>
+        session.evaluate(
+          `(() => {
+            const kind = document.getElementById("kind");
+            kind.value = ${JSON.stringify(kind)};
+            kind.dispatchEvent(new Event("change"));
+            document.getElementById("query").value = ${JSON.stringify(query)};
+            document.getElementById("lookup").requestSubmit();
+            return true;
+          })()`,
+        );
+      const invalid: Array<[string, string, RegExp]> = [
+        ["auto", "", /enter a value to look up/],
+        ["auto", "not-a-lookup", /not a block number, 20-byte address or 32-byte transaction hash/],
+        ["transaction", "0x1234", /a transaction hash is 32 bytes of hex/],
+        ["address", "0xnope", /an address is 20 bytes of hex/],
+        ["block", "abc", /a block is a decimal number or a 0x quantity/],
+      ];
+      for (const [kind, query, expected] of invalid) {
+        await submit(kind, query);
+        const status = await waitForStatus(session, expected);
+        assert.match(status, expected);
+        assert.equal(await session.evaluate<boolean>(`document.getElementById("result").hidden`), true);
+        assert.equal(await session.evaluate<string>("location.search"), beforeValidation);
+      }
     } finally {
       session.close();
       child.kill();
