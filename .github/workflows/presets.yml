@@ -36,6 +36,9 @@ jobs:
       # A file nobody has appended to cannot vouch for today, however healthy
       # its last runs were: a week matches the window the gate judges.
       MAX_AGE: 7d
+      # How many recent runs the freshness table lists when the history is
+      # stale; five fits the summary without hiding that the file stopped.
+      FRESHNESS_ROWS: 5
       # The same span immediately before FAIL_WINDOW, so each run publishes
       # this week's uptime beside the week it replaced.
       COMPARE_WINDOW: 14d..7d
@@ -132,6 +135,7 @@ jobs:
           node scripts/presets-gate.mjs .lwc-history/presets.jsonl \
             --since "$FAIL_WINDOW" \
             --max-age "$MAX_AGE" \
+            --freshness-rows "$FRESHNESS_ROWS" \
             --compare "$COMPARE_WINDOW" \
             --fail-under "$FAIL_UNDER"
 

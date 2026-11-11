@@ -3,11 +3,13 @@
 // to the job summary. It reuses the same summary functions as
 // `lwc presets-history`, so the CI verdict cannot drift from the CLI view.
 //
-// usage: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --max-age 7d --compare 14d..7d --fail-under 95
+// usage: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --max-age 7d --freshness-rows 5 --compare 14d..7d --fail-under 95
 // Writes to $GITHUB_STEP_SUMMARY when set, otherwise prints to stdout.
 // Exits 1 when a preset is below the threshold, the newest recorded run is
 // older than --max-age (or MAX_AGE, one week by default), or the window cannot
 // be checked: a healthy file nobody appends to proves nothing about today.
+// The freshness table lists --freshness-rows rows (or FRESHNESS_ROWS, five by
+// default).
 // --compare adds the earlier window to the summary; the verdict still comes from
 // the current one, so a week-over-week delta is published without weakening the gate.
 import { appendFileSync } from "node:fs";
@@ -15,6 +17,7 @@ import { appendFileSync } from "node:fs";
 import {
   PresetsHistoryArgError,
   comparePresetHistory,
+  parseFreshnessRows,
   parseMaxAgeMs,
   parsePresetHistoryArgs,
   parseRetentionMs,
@@ -44,7 +47,7 @@ function write(line) {
 function usage(message) {
   console.error(`usage error: ${message}`);
   console.error(
-    "  example: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --max-age 7d --compare 14d..7d --fail-under 95",
+    "  example: node scripts/presets-gate.mjs .lwc-history/presets.jsonl --since 7d --max-age 7d --freshness-rows 5 --compare 14d..7d --fail-under 95",
   );
   process.exit(1);
 }
@@ -54,6 +57,7 @@ function usage(message) {
 // to the check that produces the verdict.
 const argv = process.argv.slice(2);
 let maxAgeRaw = process.env.MAX_AGE?.trim() || "7d";
+let freshnessRowsRaw = process.env.FRESHNESS_ROWS?.trim() || "5";
 const gateArgv = [];
 for (let index = 0; index < argv.length; index += 1) {
   const arg = argv[index] ?? "";
@@ -61,14 +65,20 @@ for (let index = 0; index < argv.length; index += 1) {
     maxAgeRaw = arg.startsWith("--max-age=")
       ? arg.slice("--max-age=".length)
       : argv[++index] ?? "";
+  } else if (arg === "--freshness-rows" || arg.startsWith("--freshness-rows=")) {
+    freshnessRowsRaw = arg.startsWith("--freshness-rows=")
+      ? arg.slice("--freshness-rows=".length)
+      : argv[++index] ?? "";
   } else {
     gateArgv.push(arg);
   }
 }
 
 let maxAgeMs;
+let freshnessRows;
 try {
   maxAgeMs = parseMaxAgeMs(maxAgeRaw);
+  freshnessRows = parseFreshnessRows(freshnessRowsRaw);
 } catch (error) {
   if (error instanceof PresetsHistoryArgError) usage(error.message);
   throw error;
@@ -127,7 +137,10 @@ const comparison =
 // A stale file gets its newest runs as a table, so the summary shows every row
 // growing old instead of one line asserting it. A fresh file keeps the uptime
 // table alone.
-const freshness = check.stale === null ? null : presetFreshnessMarkdown(check, records);
+const freshness =
+  check.stale === null
+    ? null
+    : presetFreshnessMarkdown(check, records, { limit: freshnessRows });
 const markdown = [
   freshness,
   gate.markdown,
