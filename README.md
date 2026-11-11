@@ -218,7 +218,9 @@ does not exist yet (`--strict-missing` makes that a failure instead), and a
 refusal to merge rather than gate a file other than the one it names. Exit
 codes are 0 for a pass or skip, 1 for a failed gate and 2 for a misconfigured
 hook; `--json` writes one document to stdout in every outcome, with the
-explanation kept on stderr so stdout stays parseable. The path and threshold
+explanation kept on stderr so stdout stays parseable. A stale history makes the
+failure report list its newest runs with their age, so the rows that are past
+the bound are visible instead of summarized in one line. The path and threshold
 can come from `LWC_PRESETS_HISTORY`, `LWC_FAIL_UNDER` and `LWC_MAX_AGE`, which
 is how the repository hook sets them:
 

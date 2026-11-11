@@ -1016,6 +1016,35 @@ test("presetFreshnessMarkdown caps the rows and reports a fresh file", () => {
   assert.equal(presetFreshnessMarkdown(unbounded, records), null);
 });
 
+test("formatPresetHistoryCheck tables a stale file's newest runs", () => {
+  const records = [
+    record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-09T06:17:00.000Z", [
+      endpoint("base", 8453),
+      endpoint("ethereum", 1, {
+        ok: false,
+        latencyMs: null,
+        blockNumber: null,
+        error: "down",
+      }),
+    ]),
+  ];
+  const now = Date.parse("2026-11-10T06:17:00Z");
+  const summary = summarizePresetHistory(records, {});
+  const check = presetHistoryCheck("h.jsonl", summary, 95, {
+    maxAgeMs: 3_600_000,
+    now,
+  });
+
+  const text = formatPresetHistoryCheck(check, records);
+  assert.match(text, /max age\s+1 hour/);
+  assert.match(text, /newest\s+1 day old, past the 1 hour maximum\./);
+  assert.match(text, /freshness\s+newest first/);
+  assert.match(text, /2026-11-09 06:17\s+1 day\s+2 presets, 1 failed/);
+  assert.match(text, /2026-11-08 06:17\s+2 days\s+1 preset, 0 failed/);
+  assert.doesNotMatch(text, /stale\s+newest run/);
+});
+
 test("--max-age fails the gate when the newest run is too old", () => {
   const now = Date.parse("2026-11-10T06:17:00Z");
   const summary = summarizePresetHistory([

@@ -163,6 +163,6 @@ if (json) {
   // The report stays on stderr so stdout is still a single parsed document.
   for (const line of presetHistoryFailureReasons(check)) console.error(`error: ${line}`);
 } else {
-  console.error(formatPresetHistoryCheck(check));
+  console.error(formatPresetHistoryCheck(check, file.records));
 }
 process.exit(1);

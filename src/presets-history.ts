@@ -841,6 +841,43 @@ export function presetHistoryFailureReasons(check: PresetsHistoryCheck): string[
   return reasons;
 }
 
+interface PresetFreshnessRow {
+  at: string;
+  age: string;
+  presets: number;
+  failed: number;
+}
+
+/**
+ * The newest runs with their age, newest first, or null when there is no bound
+ * to report or nothing recorded. Both the CI table and the hook report read
+ * this one list, so their rows cannot disagree.
+ */
+function freshnessRows(
+  check: PresetsHistoryCheck,
+  records: readonly PresetHistoryRecord[],
+  options: { now?: number; limit?: number } = {},
+): { rows: PresetFreshnessRow[]; total: number; newestAge: string } | null {
+  if (check.maxAge === null || records.length === 0) return null;
+  const now = options.now ?? Date.now();
+  const limit = options.limit ?? 5;
+  const newestFirst = records
+    .map((entry) => ({ entry, at: Date.parse(entry.at) }))
+    .sort((left, right) => right.at - left.at);
+  const newest = newestFirst[0];
+  if (newest === undefined) return null;
+  return {
+    rows: newestFirst.slice(0, limit).map(({ entry, at }) => ({
+      at: stamp(entry.at),
+      age: formatAge(Math.max(0, now - at)),
+      presets: entry.endpoints.length,
+      failed: entry.failed,
+    })),
+    total: newestFirst.length,
+    newestAge: formatAge(Math.max(0, now - newest.at)),
+  };
+}
+
 /**
  * The newest runs with their age, as a markdown table for the CI summary. A
  * verdict line cannot show that every row is old; a table can. The gate uses it
@@ -853,38 +890,39 @@ export function presetFreshnessMarkdown(
   options: { now?: number; limit?: number } = {},
 ): string | null {
   const maxAge = check.maxAge;
-  if (maxAge === null || records.length === 0) return null;
-  const now = options.now ?? Date.now();
-  const limit = options.limit ?? 5;
-  const newestFirst = records
-    .map((entry) => ({ entry, at: Date.parse(entry.at) }))
-    .sort((left, right) => right.at - left.at);
-  const newest = newestFirst[0];
-  if (newest === undefined) return null;
-  const shown = newestFirst.slice(0, limit);
+  const freshness = freshnessRows(check, records, options);
+  if (maxAge === null || freshness === null) return null;
   const staleAge = check.stale?.age ?? null;
   const lines = [
     `### Preset freshness — ${staleAge === null ? "PASS" : "FAIL"}`,
     "",
     "| Newest runs (UTC) | Age | Presets | Failed |",
     "| --- | --- | --- | --- |",
-    ...shown.map(
-      ({ entry, at }) =>
-        `| ${stamp(entry.at)} | ${formatAge(Math.max(0, now - at))} | ${entry.endpoints.length} | ${entry.failed} |`,
+    ...freshness.rows.map(
+      (row) => `| ${row.at} | ${row.age} | ${row.presets} | ${row.failed} |`,
     ),
     "",
     staleAge === null
-      ? `Newest recorded run is ${formatAge(Math.max(0, now - newest.at))} old, within the ${maxAge.label} maximum.`
+      ? `Newest recorded run is ${freshness.newestAge} old, within the ${maxAge.label} maximum.`
       : `Newest recorded run is ${staleAge} old, past the ${maxAge.label} maximum, so the gate fails on freshness alone.`,
   ];
-  if (shown.length < newestFirst.length) {
-    lines.push(`Showing the newest ${shown.length} of ${newestFirst.length} recorded runs.`);
+  if (freshness.rows.length < freshness.total) {
+    lines.push(
+      `Showing the newest ${freshness.rows.length} of ${freshness.total} recorded runs.`,
+    );
   }
   return lines.join("\n");
 }
 
-/** Render the local check as one aligned pass, ending in the verdict. */
-export function formatPresetHistoryCheck(check: PresetsHistoryCheck): string {
+/**
+ * Render the local check as one aligned pass, ending in the verdict. Passing the
+ * records replaces the single stale line with the newest runs and their age, so
+ * a stopped schedule is visible row by row; without them the summary line stays.
+ */
+export function formatPresetHistoryCheck(
+  check: PresetsHistoryCheck,
+  records?: readonly PresetHistoryRecord[],
+): string {
   const field = (label: string, value: string): string => `  ${label.padEnd(9)}${value}`;
   const { coverage, retention, gate, window: applied } = check;
   const runs =
@@ -915,12 +953,34 @@ export function formatPresetHistoryCheck(check: PresetsHistoryCheck): string {
   if (check.note !== null) lines.push(field("note", check.note));
   if (check.maxAge !== null) lines.push(field("max age", check.maxAge.label));
   if (check.stale !== null && check.maxAge !== null) {
-    lines.push(
-      field(
-        "stale",
-        `newest run ${stamp(check.stale.newest)} is ${check.stale.age} old, past the ${check.maxAge.label} maximum.`,
-      ),
-    );
+    // Anchor the rows to the same instant the check judged, so the table's newest
+    // age is the age the verdict used rather than a few milliseconds later.
+    const freshness = freshnessRows(check, records ?? [], {
+      now: Date.parse(check.stale.newest) + check.stale.ageMs,
+    });
+    if (freshness === null) {
+      lines.push(
+        field(
+          "stale",
+          `newest run ${stamp(check.stale.newest)} is ${check.stale.age} old, past the ${check.maxAge.label} maximum.`,
+        ),
+      );
+    } else {
+      lines.push(
+        field("newest", `${check.stale.age} old, past the ${check.maxAge.label} maximum.`),
+        `  freshness newest first`,
+      );
+      for (const row of freshness.rows) {
+        lines.push(
+          `    ${row.at.padEnd(17)}${row.age.padEnd(9)}${row.presets} preset${row.presets === 1 ? "" : "s"}, ${row.failed} failed`,
+        );
+      }
+      if (freshness.rows.length < freshness.total) {
+        lines.push(
+          `    showing the newest ${freshness.rows.length} of ${freshness.total} recorded runs`,
+        );
+      }
+    }
   }
 
   if (check.runs === 0) {
