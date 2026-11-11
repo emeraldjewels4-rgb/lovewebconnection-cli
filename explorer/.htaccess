@@ -1,0 +1,11 @@
+Options -Indexes
+
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+# The page and its data are static; only rpc.php accepts a body.
+<IfModule mod_mime.c>
+  AddType application/json .json
+</IfModule>

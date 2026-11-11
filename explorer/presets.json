@@ -1,0 +1,58 @@
+{
+  "chains": [
+    {
+      "name": "xlayer",
+      "chainId": 196,
+      "symbol": "OKB",
+      "endpoints": [
+        "https://xlayer.drpc.org",
+        "https://rpc.xlayer.tech"
+      ]
+    },
+    {
+      "name": "base",
+      "chainId": 8453,
+      "symbol": "ETH",
+      "endpoints": [
+        "https://mainnet.base.org",
+        "https://base-rpc.publicnode.com"
+      ]
+    },
+    {
+      "name": "ethereum",
+      "chainId": 1,
+      "symbol": "ETH",
+      "endpoints": [
+        "https://ethereum-rpc.publicnode.com",
+        "https://cloudflare-eth.com"
+      ]
+    },
+    {
+      "name": "arbitrum",
+      "chainId": 42161,
+      "symbol": "ETH",
+      "endpoints": [
+        "https://arb1.arbitrum.io/rpc",
+        "https://arbitrum-one-rpc.publicnode.com"
+      ]
+    },
+    {
+      "name": "optimism",
+      "chainId": 10,
+      "symbol": "ETH",
+      "endpoints": [
+        "https://mainnet.optimism.io",
+        "https://optimism-rpc.publicnode.com"
+      ]
+    },
+    {
+      "name": "polygon",
+      "chainId": 137,
+      "symbol": "POL",
+      "endpoints": [
+        "https://polygon-bor-rpc.publicnode.com",
+        "https://polygon.drpc.org"
+      ]
+    }
+  ]
+}

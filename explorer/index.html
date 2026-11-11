@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>lwc explorer — read-only chain explorer</title>
+<meta name="description" content="Browse the preset chains lovewebconnection probes: live endpoint health, block and address lookups. Read-only." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%2308090c'/%3E%3Cpath%20d='M9%2011h14M9%2016h9M9%2021h12'%20stroke='%237c5cff'%20stroke-width='2.5'%20stroke-linecap='round'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<main>
+  <header>
+    <span class="tag">read-only</span>
+    <h1>lwc <span>explorer</span></h1>
+    <p class="lede">
+      The six chains built into <span class="mono">lovewebconnection</span>, probed live on their
+      primary and fallback endpoints, with block, address and transaction lookups. Nothing here
+      holds a key, signs, or moves funds.
+    </p>
+  </header>
+
+  <section aria-labelledby="health-h">
+    <div class="section-head">
+      <h2 id="health-h">Preset health</h2>
+      <p class="note" id="summary" aria-live="polite">probing every preset…</p>
+    </div>
+    <div class="scroll">
+      <table id="chains">
+        <thead>
+          <tr>
+            <th>Chain</th>
+            <th>ID</th>
+            <th>Endpoint</th>
+            <th>Block</th>
+            <th>Latency</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="6" class="note">probing…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note hint" id="proxy-note" hidden></p>
+  </section>
+
+  <section aria-labelledby="lookup-h">
+    <h2 id="lookup-h">Look up</h2>
+    <form id="lookup" autocomplete="off">
+      <label class="field">
+        <span>Chain</span>
+        <select id="chain" required></select>
+      </label>
+      <label class="field grow">
+        <span>Block number, address or transaction hash</span>
+        <input id="query" placeholder="19000000, 0x… address, 0x… 64-byte hash" spellcheck="false" />
+      </label>
+      <button type="submit" id="go">Look up</button>
+    </form>
+    <p class="note" id="status" role="status" aria-live="polite"></p>
+    <div id="result" class="result" aria-live="polite"></div>
+  </section>
+
+  <footer>
+    <p>
+      Endpoint probes and lookups go through this host's <span class="mono">rpc.php</span>, which
+      forwards only read methods to the primary, then the fallback, and reports which answered.
+      The preset list is generated from <span class="mono">CHAIN_PRESETS</span> in the lwc source.
+    </p>
+    <p><a href="/">Dashboard</a> · <a href="/scan/">Polygon scan</a></p>
+  </footer>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

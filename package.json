@@ -59,6 +59,7 @@
     "market": "node src/cli.ts market",
     "presets": "node src/cli.ts presets",
     "presets-history": "node src/cli.ts presets-history",
+    "explorer:data": "node scripts/explorer-data.mjs",
     "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {
