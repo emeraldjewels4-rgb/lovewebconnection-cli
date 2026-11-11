@@ -28,6 +28,12 @@ npm run explorer:data
 Rerun this after changing `CHAIN_PRESETS` in `src/chain.ts`. The page and
 `rpc.php` both read `presets.json`, so they cannot disagree.
 
+## Shareable lookups
+
+Every lookup is written into the address bar as `chain`, `type` and `q`, for
+example `?chain=ethereum&type=token&q=0xA0b8…eB48`. Opening that URL selects the
+chain and mode and runs the lookup on load.
+
 ## Run locally
 
 ```sh
@@ -49,7 +55,7 @@ endpoint that sends no CORS header.
    visible).
 4. Open `https://<your-domain>/explorer/`.
 
-`index.html` loads `app.js?v=2`. The parent site marks `.js` files immutable for
+`index.html` loads `app.js?v=3`. The parent site marks `.js` files immutable for
 a year, so bump that number whenever `app.js` changes; otherwise a browser that
 loaded the old script keeps running it.
 

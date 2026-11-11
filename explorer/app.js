@@ -118,6 +118,15 @@ function syncKind() {
   $("query").placeholder = placeholder;
 }
 
+/** Put the current lookup in the address bar so it can be shared or reloaded. */
+function syncUrl(chain, kind, query) {
+  const url = new URL(location.href);
+  url.searchParams.set("chain", chain.name);
+  url.searchParams.set("type", kind);
+  url.searchParams.set("q", query);
+  history.replaceState(null, "", url.toString());
+}
+
 function hostOf(url) {
   try {
     return new URL(url).host;
@@ -513,6 +522,7 @@ async function submit(event) {
     return;
   }
 
+  syncUrl(chain, kind, query);
   $("go").disabled = true;
   status.textContent = `reading ${chain.name}…`;
   try {
@@ -562,13 +572,28 @@ async function boot() {
     return;
   }
 
-  state.selected = state.chains[0].name;
+  const params = new URLSearchParams(location.search);
+  const wantedChain = params.get("chain");
+  const wantedType = params.get("type");
+  const wantedQuery = params.get("q") || params.get("query");
+
+  state.selected =
+    wantedChain && state.chains.some((chain) => chain.name === wantedChain)
+      ? wantedChain
+      : state.chains[0].name;
   renderOptions();
   renderChains({});
+
   $("kind").addEventListener("change", syncKind);
+  if (wantedType && KIND_HINTS[wantedType]) $("kind").value = wantedType;
   syncKind();
   $("lookup").addEventListener("submit", submit);
   await probeAll();
+
+  if (wantedQuery) {
+    $("query").value = wantedQuery;
+    $("lookup").requestSubmit();
+  }
 }
 
 boot();
