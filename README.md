@@ -1,12 +1,12 @@
 # lwc — lovewebconnection
 
-<!-- Status badges. Fiatgod is the GitHub account this project belongs to and
-     lovewebconnection is its package name. No repository exists under this slug
-     yet, so the images resolve only once it is created; if it is created under
-     another name, change the slug in both lines. -->
-[![Tests](https://github.com/Fiatgod/lovewebconnection/actions/workflows/tests.yml/badge.svg)](https://github.com/Fiatgod/lovewebconnection/actions/workflows/tests.yml)
-[![Migrations](https://github.com/Fiatgod/lovewebconnection/actions/workflows/migrations.yml/badge.svg)](https://github.com/Fiatgod/lovewebconnection/actions/workflows/migrations.yml)
-[![Preset health](https://github.com/Fiatgod/lovewebconnection/actions/workflows/presets.yml/badge.svg)](https://github.com/Fiatgod/lovewebconnection/actions/workflows/presets.yml)
+<!-- Status badges for emeraldjewels4-rgb/lovewebconnection-cli, the public
+     repository these workflows run in. The lovewebconnection slug is a
+     different, private project, so keep this one distinct; change the slug in
+     all three lines if the repository moves. -->
+[![Tests](https://github.com/emeraldjewels4-rgb/lovewebconnection-cli/actions/workflows/tests.yml/badge.svg)](https://github.com/emeraldjewels4-rgb/lovewebconnection-cli/actions/workflows/tests.yml)
+[![Migrations](https://github.com/emeraldjewels4-rgb/lovewebconnection-cli/actions/workflows/migrations.yml/badge.svg)](https://github.com/emeraldjewels4-rgb/lovewebconnection-cli/actions/workflows/migrations.yml)
+[![Preset health](https://github.com/emeraldjewels4-rgb/lovewebconnection-cli/actions/workflows/presets.yml/badge.svg)](https://github.com/emeraldjewels4-rgb/lovewebconnection-cli/actions/workflows/presets.yml)
 
 A read-only EVM chain connection kit. Point it at any EVM-compatible JSON-RPC
 endpoint, prove the connection is live, and build on the same client.
