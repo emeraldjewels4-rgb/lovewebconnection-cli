@@ -19,6 +19,9 @@ import { fileURLToPath } from "node:url";
  */
 
 const TOKEN = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+const PROXY = "0x1111111111111111111111111111111111111111";
+const IMPLEMENTATION = "0x2222222222222222222222222222222222222222";
+const EIP1967_IMPLEMENTATION = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
 const ERC20 = {
   name: "0x06fdde03",
   symbol: "0x95d89b41",
@@ -184,18 +187,23 @@ function answer(method: string, params: unknown[], chainId: number): unknown {
     case "eth_getTransactionCount":
       return "0x1";
     case "eth_getCode":
-      return String(params[0]).toLowerCase() === TOKEN ? "0x6080604052" : "0x";
+      return [TOKEN, PROXY].includes(String(params[0]).toLowerCase()) ? "0x6080604052" : "0x";
     case "eth_call": {
       const call = params[0] as { data?: string } | undefined;
       const data = call?.data ?? "";
       if (data.startsWith(ERC20.name)) return abiString("USD Coin");
       if (data.startsWith(ERC20.symbol)) return abiString("USDC");
       if (data.startsWith(ERC20.decimals)) return `0x${"0".repeat(63)}6`;
-      if (data.startsWith(ERC20.totalSupply)) return `0x${(10n ** 18n).toString(16).padStart(64, "0")}`;
+      if (data.startsWith(ERC20.totalSupply)) return `0x${1234567890000n.toString(16).padStart(64, "0")}`;
       return "0x";
     }
-    case "eth_getStorageAt":
+    case "eth_getStorageAt": {
+      const [account, slot] = params as [string, string, string];
+      if (account.toLowerCase() === PROXY && slot.toLowerCase() === EIP1967_IMPLEMENTATION) {
+        return `0x${"0".repeat(24)}${IMPLEMENTATION.slice(2)}`;
+      }
       return `0x${"0".repeat(64)}`;
+    }
     default:
       return null;
   }
@@ -354,6 +362,12 @@ test(
       assert.equal(deepLink.kind, "token");
       assert.match(deepLink.search, /type=token/);
 
+      const tokenText = await session.evaluate<string>(`document.getElementById("result").innerText`);
+      assert.match(tokenText, /USDC · USD Coin/);
+      assert.match(tokenText, /Decimals\s+6/);
+      assert.match(tokenText, /Total supply\s+1,234,567\.89 USDC/);
+      assert.match(tokenText, /Contract\s+5 bytes of code/);
+
       await session.evaluate(
         `(() => {
           const kind = document.getElementById("kind");
@@ -373,6 +387,23 @@ test(
         `location.search.includes("type=token") && document.getElementById("result").innerText.includes("USD Coin")`,
       );
       assert.equal(await session.evaluate<string>(`document.getElementById("kind").value`), "token");
+
+      await session.evaluate(
+        `(() => {
+          const kind = document.getElementById("kind");
+          kind.value = "contract";
+          kind.dispatchEvent(new Event("change"));
+          document.getElementById("query").value = "${PROXY}";
+          document.getElementById("lookup").requestSubmit();
+          return true;
+        })()`,
+      );
+      await waitFor(session, `document.getElementById("result").innerText.includes("proxy (EIP-1967)")`);
+      const contractText = await session.evaluate<string>(`document.getElementById("result").innerText`);
+      assert.match(contractText, /Code\s+5 bytes/);
+      assert.match(contractText, /Kind\s+proxy \(EIP-1967\)/);
+      assert.match(contractText, /Implementation\s+0x2222/);
+      assert.match(await session.evaluate<string>("location.search"), /type=contract/);
 
       await session.evaluate(
         `(() => {
