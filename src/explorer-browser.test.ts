@@ -20,6 +20,8 @@ import { fileURLToPath } from "node:url";
 
 const TOKEN = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
 const PROXY = "0x1111111111111111111111111111111111111111";
+const EOA = `0x${"33".repeat(20)}`;
+const MISSING_BLOCK = "0xffffffff";
 const IMPLEMENTATION = "0x2222222222222222222222222222222222222222";
 const TX_HASH = `0x${"12".repeat(32)}`;
 const FROM = `0x${"aa".repeat(20)}`;
@@ -170,6 +172,7 @@ function answer(method: string, params: unknown[], chainId: number): unknown {
     case "eth_blockNumber":
       return "0x121eac1";
     case "eth_getBlockByNumber": {
+      if (params[0] === MISSING_BLOCK) return null;
       const number = BigInt(String(params[0]));
       return {
         number: `0x${number.toString(16)}`,
@@ -497,6 +500,43 @@ test(
       };
       assert.ok(counts.delayed >= 2, "the page requested the delayed block");
       assert.ok(counts.aborted >= 1, "the superseded block request was aborted at the server");
+
+      await session.evaluate(
+        `(() => {
+          const kind = document.getElementById("kind");
+          kind.value = "block";
+          kind.dispatchEvent(new Event("change"));
+          document.getElementById("query").value = "4294967295";
+          document.getElementById("lookup").requestSubmit();
+          return true;
+        })()`,
+      );
+      await waitFor(session, `document.getElementById("status").textContent.includes("no block")`);
+      assert.match(
+        await session.evaluate<string>(`document.getElementById("status").textContent`),
+        /no block 0xffffffff on ethereum/,
+      );
+      assert.equal(await session.evaluate<boolean>(`document.getElementById("result").hidden`), true);
+      assert.equal(await session.evaluate<boolean>(`document.getElementById("go").disabled`), false);
+      assert.match(await session.evaluate<string>("location.search"), /type=block/);
+
+      await session.evaluate(
+        `(() => {
+          const kind = document.getElementById("kind");
+          kind.value = "contract";
+          kind.dispatchEvent(new Event("change"));
+          document.getElementById("query").value = "${EOA}";
+          document.getElementById("lookup").requestSubmit();
+          return true;
+        })()`,
+      );
+      await waitFor(session, `document.getElementById("status").textContent.includes("no contract")`);
+      assert.match(
+        await session.evaluate<string>(`document.getElementById("status").textContent`),
+        /no contract at 0x33333333/,
+      );
+      assert.equal(await session.evaluate<boolean>(`document.getElementById("result").hidden`), true);
+      assert.match(await session.evaluate<string>("location.search"), /type=contract/);
     } finally {
       session.close();
       child.kill();
