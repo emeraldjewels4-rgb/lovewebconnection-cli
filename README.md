@@ -1908,6 +1908,28 @@ CHROME_PATH="/path/to/chrome" node --test src/explorer-browser.test.ts
 LWC_SKIP_BROWSER=1 npm test                          # skip only the browser file
 ```
 
+### Releasing
+
+Publishing runs from `.github/workflows/publish.yml` on a version tag through
+npm trusted publishing (OIDC), so the repository stores no `NPM_TOKEN`. Bump the
+version, commit it, and push a matching tag:
+
+```bash
+npm version patch --no-git-tag-version   # or minor / major
+# commit the version change on main
+git tag v0.2.1
+git push origin main v0.2.1
+```
+
+The tag must match `package.json`, or the workflow stops before publishing. It
+then runs the typecheck, the offline suite and the build, and publishes with
+`npm publish --access public`; provenance is generated automatically because the
+publish is authenticated by OIDC. The npm side trusts only this repository and
+this workflow filename, configured under the package's **Settings → Trusted
+Publisher**, so renaming the workflow or moving the repository requires updating
+that connection. A granular token can still publish manually, but a release no
+longer needs one.
+
 ## Next step
 
 To prove the connection end to end, run `npm run chain` with real values. If the
