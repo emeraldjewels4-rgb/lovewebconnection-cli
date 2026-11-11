@@ -375,6 +375,7 @@ export {
   parsePresetHistoryArgs,
   parseMaxAgeMs,
   parseRetentionMs,
+  presetFreshnessMarkdown,
   presetHistoryCheck,
   presetHistoryCsv,
   presetHistoryFailureReasons,

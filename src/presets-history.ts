@@ -841,6 +841,48 @@ export function presetHistoryFailureReasons(check: PresetsHistoryCheck): string[
   return reasons;
 }
 
+/**
+ * The newest runs with their age, as a markdown table for the CI summary. A
+ * verdict line cannot show that every row is old; a table can. The gate uses it
+ * only for a stale file, but the table reports either verdict so the wording
+ * lives in one tested place.
+ */
+export function presetFreshnessMarkdown(
+  check: PresetsHistoryCheck,
+  records: readonly PresetHistoryRecord[],
+  options: { now?: number; limit?: number } = {},
+): string | null {
+  const maxAge = check.maxAge;
+  if (maxAge === null || records.length === 0) return null;
+  const now = options.now ?? Date.now();
+  const limit = options.limit ?? 5;
+  const newestFirst = records
+    .map((entry) => ({ entry, at: Date.parse(entry.at) }))
+    .sort((left, right) => right.at - left.at);
+  const newest = newestFirst[0];
+  if (newest === undefined) return null;
+  const shown = newestFirst.slice(0, limit);
+  const staleAge = check.stale?.age ?? null;
+  const lines = [
+    `### Preset freshness — ${staleAge === null ? "PASS" : "FAIL"}`,
+    "",
+    "| Newest runs (UTC) | Age | Presets | Failed |",
+    "| --- | --- | --- | --- |",
+    ...shown.map(
+      ({ entry, at }) =>
+        `| ${stamp(entry.at)} | ${formatAge(Math.max(0, now - at))} | ${entry.endpoints.length} | ${entry.failed} |`,
+    ),
+    "",
+    staleAge === null
+      ? `Newest recorded run is ${formatAge(Math.max(0, now - newest.at))} old, within the ${maxAge.label} maximum.`
+      : `Newest recorded run is ${staleAge} old, past the ${maxAge.label} maximum, so the gate fails on freshness alone.`,
+  ];
+  if (shown.length < newestFirst.length) {
+    lines.push(`Showing the newest ${shown.length} of ${newestFirst.length} recorded runs.`);
+  }
+  return lines.join("\n");
+}
+
 /** Render the local check as one aligned pass, ending in the verdict. */
 export function formatPresetHistoryCheck(check: PresetsHistoryCheck): string {
   const field = (label: string, value: string): string => `  ${label.padEnd(9)}${value}`;

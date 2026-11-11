@@ -19,6 +19,7 @@ import {
   parsePresetHistoryArgs,
   presetHistoryCheck,
   presetHistoryCsv,
+  presetFreshnessMarkdown,
   presetHistoryFailureReasons,
   presetComparisonMarkdown,
   presetHistoryTimelineCsv,
@@ -953,6 +954,66 @@ test("failure reasons explain an empty window without an age bound", () => {
   assert.deepEqual(presetHistoryFailureReasons(check), [
     "no runs in the window (1 recorded), so 95% cannot be verified.",
   ]);
+});
+
+test("presetFreshnessMarkdown tables the newest runs with their age", () => {
+  const records = [
+    record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-09T06:17:00.000Z", [
+      endpoint("base", 8453),
+      endpoint("ethereum", 1, {
+        ok: false,
+        latencyMs: null,
+        blockNumber: null,
+        error: "down",
+      }),
+    ]),
+  ];
+  const now = Date.parse("2026-11-10T06:17:00Z");
+  const summary = summarizePresetHistory(records, {});
+  const check = presetHistoryCheck("h.jsonl", summary, 95, {
+    maxAgeMs: 3_600_000,
+    now,
+  });
+
+  assert.equal(
+    presetFreshnessMarkdown(check, records, { now }),
+    [
+      "### Preset freshness — FAIL",
+      "",
+      "| Newest runs (UTC) | Age | Presets | Failed |",
+      "| --- | --- | --- | --- |",
+      "| 2026-11-09 06:17 | 1 day | 2 | 1 |",
+      "| 2026-11-08 06:17 | 2 days | 1 | 0 |",
+      "",
+      "Newest recorded run is 1 day old, past the 1 hour maximum, so the gate fails on freshness alone.",
+    ].join("\n"),
+  );
+});
+
+test("presetFreshnessMarkdown caps the rows and reports a fresh file", () => {
+  const records = [
+    record("2026-11-07T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-08T06:17:00.000Z", [endpoint("base", 8453)]),
+    record("2026-11-09T06:17:00.000Z", [endpoint("base", 8453)]),
+  ];
+  const now = Date.parse("2026-11-10T06:17:00Z");
+  const summary = summarizePresetHistory(records, {});
+  const check = presetHistoryCheck("h.jsonl", summary, 95, {
+    maxAgeMs: 604_800_000,
+    now,
+  });
+
+  const table = presetFreshnessMarkdown(check, records, { now, limit: 2 }) ?? "";
+  assert.match(table, /### Preset freshness — PASS/);
+  assert.equal(table.match(/^\| 2026-/gm)?.length, 2);
+  assert.match(table, /\| 2026-11-09 06:17 \| 1 day \|/);
+  assert.match(table, /Newest recorded run is 1 day old, within the 7 days maximum\./);
+  assert.match(table, /Showing the newest 2 of 3 recorded runs\./);
+
+  // Without a bound there is no freshness verdict to table.
+  const unbounded = presetHistoryCheck("h.jsonl", summary, 95);
+  assert.equal(presetFreshnessMarkdown(unbounded, records), null);
 });
 
 test("--max-age fails the gate when the newest run is too old", () => {

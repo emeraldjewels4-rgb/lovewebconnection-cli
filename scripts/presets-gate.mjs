@@ -19,6 +19,7 @@ import {
   parsePresetHistoryArgs,
   parseRetentionMs,
   presetComparisonMarkdown,
+  presetFreshnessMarkdown,
   presetHistoryCheck,
   presetHistoryFailureReasons,
   presetRegressionWarnings,
@@ -123,21 +124,13 @@ const comparison =
     : comparePresetHistory(records, { since: args.since, until: args.until }, args.compare, {
         retainMs,
       });
-const staleNote =
-  check.stale === null || check.maxAge === null
-    ? null
-    : `> **Stale history** — newest run ${check.stale.newest} is ${check.stale.age} old, past the ${check.maxAge.label} maximum, so the table below covers a window that has stopped growing.`;
-// The uptime table can pass while the file is stale, so the verdict line is
-// repeated after it: the step fails on freshness alone, and the summary has to
-// say why rather than show only the PASS.
-const staleVerdict =
-  check.stale === null || check.maxAge === null
-    ? null
-    : `**FAIL** — newest run ${check.stale.newest} is ${check.stale.age} old, past the ${check.maxAge.label} maximum, so the gate fails on freshness even though the uptime table is healthy.`;
+// A stale file gets its newest runs as a table, so the summary shows every row
+// growing old instead of one line asserting it. A fresh file keeps the uptime
+// table alone.
+const freshness = check.stale === null ? null : presetFreshnessMarkdown(check, records);
 const markdown = [
-  staleNote,
+  freshness,
   gate.markdown,
-  staleVerdict,
   comparison === null ? null : presetComparisonMarkdown(comparison, "Preset week over week"),
 ]
   .filter((part) => part !== null)
