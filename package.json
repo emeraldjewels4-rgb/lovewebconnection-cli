@@ -39,7 +39,7 @@
     "prepack": "npm run build",
     "prepare": "git config core.hooksPath .githooks || true",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/chain.test.ts src/balances.test.ts src/contract.test.ts src/watch.test.ts src/call.test.ts src/metrics.test.ts src/scan.test.ts src/compare.test.ts src/compare-history.test.ts src/metadata-cache.test.ts src/cache.test.ts src/tokenfile.test.ts src/views.test.ts src/signatures.test.ts src/sessions.test.ts src/history.test.ts src/plot.test.ts src/prices.test.ts src/rotate.test.ts src/webhook.test.ts src/alert-queue.test.ts src/alert-store.test.ts src/market.test.ts src/market-server.test.ts src/presets-summary.test.ts src/presets-history.test.ts src/presets.test.ts src/explorer-state.test.ts",
+    "test": "node --test src/chain.test.ts src/balances.test.ts src/contract.test.ts src/watch.test.ts src/call.test.ts src/metrics.test.ts src/scan.test.ts src/compare.test.ts src/compare-history.test.ts src/metadata-cache.test.ts src/cache.test.ts src/tokenfile.test.ts src/views.test.ts src/signatures.test.ts src/sessions.test.ts src/history.test.ts src/plot.test.ts src/prices.test.ts src/rotate.test.ts src/webhook.test.ts src/alert-queue.test.ts src/alert-store.test.ts src/market.test.ts src/market-server.test.ts src/presets-summary.test.ts src/presets-history.test.ts src/presets.test.ts src/explorer-state.test.ts src/explorer-browser.test.ts",
     "chain": "node src/cli.ts",
     "chain:json": "node src/cli.ts --json",
     "balances": "node src/cli.ts balances",

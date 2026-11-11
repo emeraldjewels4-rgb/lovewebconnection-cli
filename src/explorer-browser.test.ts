@@ -1,0 +1,423 @@
+import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+
+/**
+ * Browser-level coverage for the explorer page. A local HTTP server serves the
+ * real page files and answers rpc.php with fixed results, so the test needs no
+ * chain endpoints. The page is driven through a headless Chromium-family
+ * browser over the DevTools protocol, using Node's built-in WebSocket.
+ *
+ * Set CHROME_PATH to a Chrome, Edge or Chromium binary when none of the usual
+ * locations has one; without a browser the test is skipped.
+ */
+
+const TOKEN = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+const ERC20 = {
+  name: "0x06fdde03",
+  symbol: "0x95d89b41",
+  decimals: "0x313ce567",
+  totalSupply: "0x18160ddd",
+};
+const DELAYED_BLOCK = "0x121eac0"; // 19,000,000, the block the test looks up
+
+type SocketEvent = { data: unknown };
+type Socket = {
+  addEventListener(
+    type: "open" | "message" | "error",
+    listener: (event: SocketEvent) => void,
+    options?: { once?: boolean },
+  ): void;
+  send(data: string): void;
+  close(): void;
+};
+
+const WebSocketCtor = (
+  globalThis as unknown as { WebSocket?: new (url: string) => Socket }
+).WebSocket;
+
+function browserCandidates(): string[] {
+  const candidates: Array<string | undefined> = [process.env.CHROME_PATH];
+  if (process.platform === "win32") {
+    for (const root of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]) {
+      if (!root) continue;
+      candidates.push(join(root, "Google", "Chrome", "Application", "chrome.exe"));
+      candidates.push(join(root, "Microsoft", "Edge", "Application", "msedge.exe"));
+    }
+  } else if (process.platform === "darwin") {
+    candidates.push("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+    candidates.push("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge");
+  } else {
+    candidates.push(
+      "/usr/bin/google-chrome",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/microsoft-edge",
+    );
+  }
+  return candidates.filter((value): value is string => Boolean(value));
+}
+
+const browserPath = browserCandidates().find((candidate) => existsSync(candidate)) ?? null;
+
+interface Pending {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+}
+
+class Session {
+  private nextId = 1;
+  private readonly pending = new Map<number, Pending>();
+  private readonly socket: Socket;
+
+  constructor(socket: Socket) {
+    this.socket = socket;
+    socket.addEventListener("message", (event) => {
+      const message = JSON.parse(String(event.data)) as {
+        id?: number;
+        error?: { message?: string };
+        result?: unknown;
+      };
+      if (typeof message.id !== "number") return;
+      const waiter = this.pending.get(message.id);
+      if (!waiter) return;
+      this.pending.delete(message.id);
+      if (message.error) waiter.reject(new Error(message.error.message ?? "cdp error"));
+      else waiter.resolve(message.result);
+    });
+  }
+
+  send<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    const id = this.nextId++;
+    return new Promise<T>((resolve, reject) => {
+      this.pending.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      });
+      this.socket.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  async evaluate<T>(expression: string): Promise<T> {
+    const answer = await this.send<{
+      result: { value: T };
+      exceptionDetails?: { text?: string; exception?: { description?: string } };
+    }>("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+    if (answer.exceptionDetails) {
+      throw new Error(
+        answer.exceptionDetails.exception?.description ?? answer.exceptionDetails.text ?? "evaluate failed",
+      );
+    }
+    return answer.result.value;
+  }
+
+  close(): void {
+    this.socket.close();
+  }
+}
+
+async function connect(url: string): Promise<Session> {
+  if (!WebSocketCtor) throw new Error("this Node build has no global WebSocket");
+  const socket = new WebSocketCtor(url);
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener("open", () => resolve(), { once: true });
+    socket.addEventListener("error", () => reject(new Error("could not connect to the browser")), {
+      once: true,
+    });
+  });
+  return new Session(socket);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(session: Session, expression: string, timeoutMs = 10_000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      if (await session.evaluate<boolean>(expression)) return;
+    } catch {
+      // The page can be mid-navigation; try again.
+    }
+    await sleep(100);
+  }
+  throw new Error(`timed out waiting for: ${expression}`);
+}
+
+function abiString(text: string): string {
+  const data = Buffer.from(text, "utf8").toString("hex");
+  const offset = (32).toString(16).padStart(64, "0");
+  const length = BigInt(data.length / 2).toString(16).padStart(64, "0");
+  return `0x${offset}${length}${data.padEnd(64, "0")}`;
+}
+
+function answer(method: string, params: unknown[], chainId: number): unknown {
+  switch (method) {
+    case "eth_chainId":
+      return `0x${chainId.toString(16)}`;
+    case "eth_blockNumber":
+      return "0x122a3c1";
+    case "eth_getBlockByNumber": {
+      const number = BigInt(String(params[0]));
+      return {
+        number: `0x${number.toString(16)}`,
+        hash: `0x${"ab".repeat(32)}`,
+        parentHash: `0x${"cd".repeat(32)}`,
+        timestamp: `0x${Math.floor(Date.now() / 1000).toString(16)}`,
+        transactions: [],
+        gasUsed: "0x5208",
+        gasLimit: "0x1c9c380",
+        baseFeePerGas: "0x3b9aca00",
+        miner: `0x${"11".repeat(20)}`,
+        size: "0x220",
+      };
+    }
+    case "eth_getBalance":
+      return "0x0";
+    case "eth_getTransactionCount":
+      return "0x1";
+    case "eth_getCode":
+      return String(params[0]).toLowerCase() === TOKEN ? "0x6080604052" : "0x";
+    case "eth_call": {
+      const call = params[0] as { data?: string } | undefined;
+      const data = call?.data ?? "";
+      if (data.startsWith(ERC20.name)) return abiString("USD Coin");
+      if (data.startsWith(ERC20.symbol)) return abiString("USDC");
+      if (data.startsWith(ERC20.decimals)) return `0x${"0".repeat(63)}6`;
+      if (data.startsWith(ERC20.totalSupply)) return `0x${(10n ** 18n).toString(16).padStart(64, "0")}`;
+      return "0x";
+    }
+    case "eth_getStorageAt":
+      return `0x${"0".repeat(64)}`;
+    default:
+      return null;
+  }
+}
+
+async function readBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.from(chunk as Buffer));
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function sendJson(response: ServerResponse, value: unknown): void {
+  response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+  response.end(JSON.stringify(value));
+}
+
+function launchBrowser(executable: string): Promise<{ child: ChildProcess; wsUrl: string; profile: string }> {
+  return new Promise((resolve, reject) => {
+    const profile = join(tmpdir(), `lwc-explorer-${process.pid}-${Date.now()}`);
+    const child = spawn(
+      executable,
+      [
+        "--headless=new",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--remote-debugging-port=0",
+        `--user-data-dir=${profile}`,
+        "about:blank",
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+
+    let output = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error("the browser did not report a DevTools endpoint"));
+    }, 20_000);
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      output += String(chunk);
+      const match = output.match(/DevTools listening on (ws:\/\/\S+)/);
+      if (match?.[1]) {
+        clearTimeout(timer);
+        resolve({ child, wsUrl: match[1], profile });
+      }
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      reject(new Error(`the browser exited with code ${code}`));
+    });
+  });
+}
+
+test(
+  "explorer deep links, history and lookup cancellation work in a browser",
+  { skip: browserPath ? false : "no Chrome, Edge or Chromium found; set CHROME_PATH" },
+  async () => {
+    assert.ok(browserPath);
+    const explorerDir = fileURLToPath(new URL("../explorer/", import.meta.url));
+    const presets = JSON.parse(
+      await readFile(join(explorerDir, "presets.json"), "utf8"),
+    ) as { chains: Array<{ name: string; chainId: number }> };
+    const chainIds = new Map(presets.chains.map((chain) => [chain.name, chain.chainId]));
+
+    const stats = { delayed: 0, aborted: 0 };
+    const files = new Map<string, { body: Buffer; type: string }>();
+    for (const [route, name, type] of [
+      ["/", "index.html", "text/html; charset=utf-8"],
+      ["/index.html", "index.html", "text/html; charset=utf-8"],
+      ["/app.js", "app.js", "text/javascript; charset=utf-8"],
+      ["/lookup-state.js", "lookup-state.js", "text/javascript; charset=utf-8"],
+      ["/presets.json", "presets.json", "application/json; charset=utf-8"],
+      ["/style.css", "style.css", "text/css; charset=utf-8"],
+    ] as const) {
+      files.set(route, { body: await readFile(join(explorerDir, name)), type });
+    }
+
+    const server = createServer(async (request, response) => {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (url.pathname === "/__stats") {
+        sendJson(response, stats);
+        return;
+      }
+      if (url.pathname === "/rpc.php" && request.method === "POST") {
+        const body = JSON.parse(await readBody(request)) as { method: string; params?: unknown[] };
+        const chainId = chainIds.get(url.searchParams.get("chain") ?? "") ?? 1;
+        const params = body.params ?? [];
+
+        if (body.method === "eth_getBlockByNumber" && params[0] === DELAYED_BLOCK) {
+          stats.delayed += 1;
+          const timer = setTimeout(() => {
+            sendJson(response, {
+              jsonrpc: "2.0",
+              id: 1,
+              result: answer(body.method, params, chainId),
+            });
+          }, 1500);
+          response.on("close", () => {
+            if (response.writableEnded) return;
+            clearTimeout(timer);
+            stats.aborted += 1;
+          });
+          return;
+        }
+
+        sendJson(response, { jsonrpc: "2.0", id: 1, result: answer(body.method, params, chainId) });
+        return;
+      }
+
+      const file = files.get(url.pathname);
+      if (file) {
+        response.writeHead(200, { "content-type": file.type });
+        response.end(file.body);
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const base = `http://127.0.0.1:${address.port}`;
+
+    const { child, wsUrl, profile } = await launchBrowser(browserPath!);
+    const port = new URL(wsUrl).port;
+    const target = (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, {
+      method: "PUT",
+    }).then((response) => response.json())) as { webSocketDebuggerUrl: string };
+    const session = await connect(target.webSocketDebuggerUrl);
+
+    try {
+      await session.send("Page.enable");
+      await session.send("Runtime.enable");
+      await session.send("Page.navigate", {
+        url: `${base}/?chain=ethereum&type=token&q=${TOKEN}`,
+      });
+
+      await waitFor(
+        session,
+        `document.readyState === "complete" && document.getElementById("result").innerText.includes("USD Coin")`,
+      );
+      const deepLink = await session.evaluate<{ kind: string; chain: string; search: string }>(
+        `({ kind: document.getElementById("kind").value, chain: document.getElementById("chain").value, search: location.search })`,
+      );
+      assert.equal(deepLink.chain, "ethereum");
+      assert.equal(deepLink.kind, "token");
+      assert.match(deepLink.search, /type=token/);
+
+      await session.evaluate(
+        `(() => {
+          const kind = document.getElementById("kind");
+          kind.value = "block";
+          kind.dispatchEvent(new Event("change"));
+          document.getElementById("query").value = "19000000";
+          document.getElementById("lookup").requestSubmit();
+          return true;
+        })()`,
+      );
+      await waitFor(session, `document.getElementById("result").innerText.includes("Block 19,000,000")`);
+      assert.match(await session.evaluate<string>("location.search"), /type=block/);
+
+      await session.evaluate("history.back()");
+      await waitFor(
+        session,
+        `location.search.includes("type=token") && document.getElementById("result").innerText.includes("USD Coin")`,
+      );
+      assert.equal(await session.evaluate<string>(`document.getElementById("kind").value`), "token");
+
+      await session.evaluate(
+        `(() => {
+          const kind = document.getElementById("kind");
+          kind.value = "block";
+          kind.dispatchEvent(new Event("change"));
+          document.getElementById("query").value = "19000000";
+          document.getElementById("lookup").requestSubmit();
+          return true;
+        })()`,
+      );
+      await sleep(200);
+      await session.evaluate(
+        `(() => {
+          const kind = document.getElementById("kind");
+          kind.value = "address";
+          kind.dispatchEvent(new Event("change"));
+          document.getElementById("query").value = "${TOKEN}";
+          document.getElementById("lookup").requestSubmit();
+          return true;
+        })()`,
+      );
+
+      await waitFor(session, `document.getElementById("result").innerText.includes("Balance")`);
+      await sleep(2000);
+      const finalText = await session.evaluate<string>(`document.getElementById("result").innerText`);
+      assert.match(finalText, /Balance/, "the address lookup stays on screen");
+      assert.doesNotMatch(finalText, /Block 19,000,000/, "the aborted block never rendered");
+      assert.match(await session.evaluate<string>("location.search"), /type=address/);
+
+      const counts = (await fetch(`${base}/__stats`).then((response) => response.json())) as {
+        delayed: number;
+        aborted: number;
+      };
+      assert.ok(counts.delayed >= 2, "the page requested the delayed block");
+      assert.ok(counts.aborted >= 1, "the superseded block request was aborted at the server");
+    } finally {
+      session.close();
+      child.kill();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      try {
+        rmSync(profile, { recursive: true, force: true });
+      } catch {
+        // A browser that is still shutting down can hold its profile; the OS cleans the temp dir.
+      }
+    }
+  },
+);

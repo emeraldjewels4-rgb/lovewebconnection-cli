@@ -39,7 +39,9 @@ rendering over a newer one, and starting a lookup aborts the requests of the
 previous one so only the newest stays in flight. The URL and lookup-lifecycle
 helpers live in `lookup-state.js`, imported by `app.js` with a `?v=` query;
 bump that query when the helper file changes. `src/explorer-state.test.ts`
-covers both.
+covers both, and `src/explorer-browser.test.ts` drives the real page in a
+headless Chrome, Edge or Chromium against a stub `rpc.php`; it skips when no
+browser is installed unless `CHROME_PATH` names one.
 
 ## Run locally
 
