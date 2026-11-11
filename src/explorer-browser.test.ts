@@ -76,6 +76,7 @@ const browserPath = browserCandidates().find((candidate) => existsSync(candidate
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
 }
 
 class Session {
@@ -94,18 +95,24 @@ class Session {
       if (typeof message.id !== "number") return;
       const waiter = this.pending.get(message.id);
       if (!waiter) return;
+      clearTimeout(waiter.timer);
       this.pending.delete(message.id);
       if (message.error) waiter.reject(new Error(message.error.message ?? "cdp error"));
       else waiter.resolve(message.result);
     });
   }
 
-  send<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  send<T>(method: string, params: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<T> {
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`cdp ${method} timed out`));
+      }, timeoutMs);
       this.pending.set(id, {
         resolve: resolve as (value: unknown) => void,
         reject,
+        timer,
       });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
@@ -133,10 +140,26 @@ async function connect(url: string): Promise<Session> {
   if (!WebSocketCtor) throw new Error("this Node build has no global WebSocket");
   const socket = new WebSocketCtor(url);
   await new Promise<void>((resolve, reject) => {
-    socket.addEventListener("open", () => resolve(), { once: true });
-    socket.addEventListener("error", () => reject(new Error("could not connect to the browser")), {
-      once: true,
-    });
+    const timer = setTimeout(
+      () => reject(new Error("the browser did not answer the DevTools socket")),
+      15_000,
+    );
+    socket.addEventListener(
+      "open",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+    socket.addEventListener(
+      "error",
+      () => {
+        clearTimeout(timer);
+        reject(new Error("could not connect to the browser"));
+      },
+      { once: true },
+    );
   });
   return new Session(socket);
 }
@@ -296,7 +319,10 @@ function launchBrowser(executable: string): Promise<{ child: ChildProcess; wsUrl
 
 test(
   "explorer deep links, history and lookup cancellation work in a browser",
-  { skip: browserPath ? false : "no Chrome, Edge or Chromium found; set CHROME_PATH" },
+  {
+    skip: browserPath ? false : "no Chrome, Edge or Chromium found; set CHROME_PATH",
+    timeout: 180_000,
+  },
   async () => {
     assert.ok(browserPath);
     const explorerDir = fileURLToPath(new URL("../explorer/", import.meta.url));
@@ -577,7 +603,13 @@ test(
     } finally {
       session.close();
       child.kill();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      // Chrome can still hold keep-alive sockets to the stub server, which would
+      // make server.close() wait forever; drop them and bound the wait.
+      server.closeAllConnections();
+      await Promise.race([
+        new Promise<void>((resolve) => server.close(() => resolve())),
+        sleep(5000),
+      ]);
       try {
         rmSync(profile, { recursive: true, force: true });
       } catch {
