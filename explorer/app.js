@@ -14,6 +14,15 @@ function isCurrentLookup(seq) {
   return seq === lookupSeq;
 }
 
+/** The controller for the newest lookup; superseded lookups are aborted. */
+let lookupAbort = null;
+
+function cancelLookup() {
+  lookupSeq += 1;
+  if (lookupAbort) lookupAbort.abort();
+  lookupAbort = null;
+}
+
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
 const QUANTITY = /^(0x[0-9a-fA-F]+|\d+)$/;
@@ -158,6 +167,7 @@ function applyParams(params, run) {
   $("query").value = params.query || "";
 
   if (!params.query) {
+    cancelLookup();
     $("result").hidden = true;
     $("status").textContent = "";
     return;
@@ -189,7 +199,7 @@ function text(tag, value, className) {
   return node;
 }
 
-async function rpc(chain, method, params = []) {
+async function rpc(chain, method, params = [], signal) {
   if (state.proxy !== false) {
     try {
       const response = await fetch(`rpc.php?chain=${encodeURIComponent(chain.name)}`, {
@@ -197,6 +207,7 @@ async function rpc(chain, method, params = []) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
         cache: "no-store",
+        signal,
       });
       const type = response.headers.get("content-type") || "";
       if (type.includes("application/json")) {
@@ -210,6 +221,7 @@ async function rpc(chain, method, params = []) {
       }
       state.proxy = false;
     } catch (error) {
+      if (error.name === "AbortError") throw error;
       if (state.proxy === true) throw error;
       state.proxy = false;
     }
@@ -223,12 +235,13 @@ async function rpc(chain, method, params = []) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
         cache: "no-store",
-        signal: AbortSignal.timeout(9000),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(9000)]) : AbortSignal.timeout(9000),
       });
       const body = await response.json();
       if (body.error) throw new Error(body.error.message || "rpc error");
       return { result: body.result, via: index === 0 ? "primary" : "fallback" };
     } catch (error) {
+      if (error.name === "AbortError") throw error;
       problems.push(`${hostOf(url)}: ${error.message}`);
     }
   }
@@ -376,8 +389,8 @@ function renderResult(title, tone, rows) {
   box.hidden = false;
 }
 
-async function showBlock(chain, quantity, seq) {
-  const block = await rpc(chain, "eth_getBlockByNumber", [quantity, false]);
+async function showBlock(chain, quantity, seq, signal) {
+  const block = await rpc(chain, "eth_getBlockByNumber", [quantity, false], signal);
   if (!block.result) throw new Error(`no block ${quantity} on ${chain.name}`);
   if (!isCurrentLookup(seq)) return;
   const value = block.result;
@@ -398,11 +411,11 @@ async function showBlock(chain, quantity, seq) {
   );
 }
 
-async function showAddress(chain, address, seq) {
+async function showAddress(chain, address, seq, signal) {
   const [balance, nonce, code] = await Promise.all([
-    rpc(chain, "eth_getBalance", [address, "latest"]),
-    rpc(chain, "eth_getTransactionCount", [address, "latest"]),
-    rpc(chain, "eth_getCode", [address, "latest"]),
+    rpc(chain, "eth_getBalance", [address, "latest"], signal),
+    rpc(chain, "eth_getTransactionCount", [address, "latest"], signal),
+    rpc(chain, "eth_getCode", [address, "latest"], signal),
   ]);
   if (!isCurrentLookup(seq)) return;
   const bytes = typeof code.result === "string" ? Math.max(0, (code.result.length - 2) / 2) : 0;
@@ -414,11 +427,11 @@ async function showAddress(chain, address, seq) {
   ]);
 }
 
-async function showTransaction(chain, hash, seq) {
+async function showTransaction(chain, hash, seq, signal) {
   const [transaction, receipt, head] = await Promise.all([
-    rpc(chain, "eth_getTransactionByHash", [hash]),
-    rpc(chain, "eth_getTransactionReceipt", [hash]),
-    rpc(chain, "eth_blockNumber", []),
+    rpc(chain, "eth_getTransactionByHash", [hash], signal),
+    rpc(chain, "eth_getTransactionReceipt", [hash], signal),
+    rpc(chain, "eth_blockNumber", [], signal),
   ]);
   const tx = transaction.result;
   if (!tx) throw new Error(`no transaction ${short(hash, 10)} on ${chain.name}`);
@@ -450,13 +463,13 @@ async function showTransaction(chain, hash, seq) {
   );
 }
 
-async function showToken(chain, address, seq) {
+async function showToken(chain, address, seq, signal) {
   const call = (data) =>
-    rpc(chain, "eth_call", [{ to: address, data }, "latest"])
+    rpc(chain, "eth_call", [{ to: address, data }, "latest"], signal)
       .then((answer) => answer.result)
       .catch(() => null);
   const [code, name, symbol, decimals, supply] = await Promise.all([
-    rpc(chain, "eth_getCode", [address, "latest"]).then((answer) => answer.result).catch(() => "0x"),
+    rpc(chain, "eth_getCode", [address, "latest"], signal).then((answer) => answer.result).catch(() => "0x"),
     call(ERC20.name),
     call(ERC20.symbol),
     call(ERC20.decimals),
@@ -488,14 +501,14 @@ async function showToken(chain, address, seq) {
   ]);
 }
 
-async function showContract(chain, address, seq) {
-  const code = await rpc(chain, "eth_getCode", [address, "latest"]);
+async function showContract(chain, address, seq, signal) {
+  const code = await rpc(chain, "eth_getCode", [address, "latest"], signal);
   if (!isCurrentLookup(seq)) return;
   const bytes = typeof code.result === "string" ? Math.max(0, (code.result.length - 2) / 2) : 0;
   if (bytes === 0) throw new Error(`no contract at ${short(address, 8)} on ${chain.name}`);
 
   const read = (slot) =>
-    rpc(chain, "eth_getStorageAt", [address, slot, "latest"])
+    rpc(chain, "eth_getStorageAt", [address, slot, "latest"], signal)
       .then((answer) => answer.result)
       .catch(() => null);
   const [implementation, admin, beacon] = await Promise.all([
@@ -522,7 +535,11 @@ async function showContract(chain, address, seq) {
 }
 
 async function performLookup({ push = true } = {}) {
-  const mine = ++lookupSeq;
+  cancelLookup();
+  const mine = lookupSeq;
+  const controller = new AbortController();
+  lookupAbort = controller;
+  const signal = controller.signal;
   const chain = state.chains.find((row) => row.name === $("chain").value);
   const query = $("query").value.trim();
   const status = $("status");
@@ -571,21 +588,21 @@ async function performLookup({ push = true } = {}) {
   status.textContent = `reading ${chain.name}…`;
   try {
     if (kind === "transaction") {
-      await showTransaction(chain, query, mine);
+      await showTransaction(chain, query, mine, signal);
     } else if (kind === "address") {
-      await showAddress(chain, query, mine);
+      await showAddress(chain, query, mine, signal);
     } else if (kind === "token") {
-      await showToken(chain, query, mine);
+      await showToken(chain, query, mine, signal);
     } else if (kind === "contract") {
-      await showContract(chain, query, mine);
+      await showContract(chain, query, mine, signal);
     } else {
       const quantity = query.startsWith("0x") ? `0x${bigint(query).toString(16)}` : `0x${BigInt(query).toString(16)}`;
-      await showBlock(chain, quantity, mine);
+      await showBlock(chain, quantity, mine, signal);
     }
     if (!isCurrentLookup(mine)) return;
     status.textContent = state.proxy ? "answered through rpc.php" : "answered by the endpoint directly";
   } catch (error) {
-    if (!isCurrentLookup(mine)) return;
+    if (error.name === "AbortError" || !isCurrentLookup(mine)) return;
     $("result").hidden = true;
     status.className = "note bad";
     status.textContent = error.message;

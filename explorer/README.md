@@ -35,7 +35,8 @@ example `?chain=ethereum&type=token&q=0xA0b8…eB48`. Opening that URL selects t
 chain and mode and runs the lookup on load. Each lookup is a history entry, so
 browser back and forward move between them and re-run the one in the URL.
 Lookups are sequence-guarded: a slow earlier response is discarded instead of
-rendering over a newer one.
+rendering over a newer one, and starting a lookup aborts the requests of the
+previous one so only the newest stays in flight.
 
 ## Run locally
 
@@ -58,7 +59,7 @@ endpoint that sends no CORS header.
    visible).
 4. Open `https://<your-domain>/explorer/`.
 
-`index.html` loads `app.js?v=5`. The parent site marks `.js` files immutable for
+`index.html` loads `app.js?v=6`. The parent site marks `.js` files immutable for
 a year, so bump that number whenever `app.js` changes; otherwise a browser that
 loaded the old script keeps running it.
 
