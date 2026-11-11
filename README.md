@@ -56,6 +56,12 @@ npm test                    # ...then run the checks yourself
 git config --unset core.hooksPath   # until the next npm install
 ```
 
+One test in `npm test` needs a browser: `src/explorer-browser.test.ts` drives
+the explorer page in headless Chrome and skips itself when none is installed.
+Set `CHROME_PATH` to a Chrome, Edge or Chromium binary to run it, or
+`LWC_SKIP_BROWSER=1 npm test` to skip only that file. See [CI and the browser
+test](#ci-and-the-browser-test) for what the workflow does with it.
+
 ## Connect
 
 ```bash
