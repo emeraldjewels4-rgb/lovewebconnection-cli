@@ -21,6 +21,8 @@ import { fileURLToPath } from "node:url";
 const TOKEN = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
 const PROXY = "0x1111111111111111111111111111111111111111";
 const IMPLEMENTATION = "0x2222222222222222222222222222222222222222";
+const TX_HASH = `0x${"12".repeat(32)}`;
+const FROM = `0x${"aa".repeat(20)}`;
 const EIP1967_IMPLEMENTATION = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
 const ERC20 = {
   name: "0x06fdde03",
@@ -166,7 +168,7 @@ function answer(method: string, params: unknown[], chainId: number): unknown {
     case "eth_chainId":
       return `0x${chainId.toString(16)}`;
     case "eth_blockNumber":
-      return "0x122a3c1";
+      return "0x121eac1";
     case "eth_getBlockByNumber": {
       const number = BigInt(String(params[0]));
       return {
@@ -197,6 +199,22 @@ function answer(method: string, params: unknown[], chainId: number): unknown {
       if (data.startsWith(ERC20.totalSupply)) return `0x${1234567890000n.toString(16).padStart(64, "0")}`;
       return "0x";
     }
+    case "eth_getTransactionByHash":
+      return params[0] === TX_HASH
+        ? {
+            from: FROM,
+            to: TOKEN,
+            value: "0xde0b6b3a7640000",
+            blockNumber: "0x121eac0",
+            nonce: "0x7",
+            gasPrice: "0x3b9aca00",
+            hash: TX_HASH,
+          }
+        : null;
+    case "eth_getTransactionReceipt":
+      return params[0] === TX_HASH
+        ? { status: "0x1", gasUsed: "0x5208", effectiveGasPrice: "0x3b9aca00" }
+        : null;
     case "eth_getStorageAt": {
       const [account, slot] = params as [string, string, string];
       if (account.toLowerCase() === PROXY && slot.toLowerCase() === EIP1967_IMPLEMENTATION) {
@@ -387,6 +405,45 @@ test(
         `location.search.includes("type=token") && document.getElementById("result").innerText.includes("USD Coin")`,
       );
       assert.equal(await session.evaluate<string>(`document.getElementById("kind").value`), "token");
+
+      await session.evaluate(
+        `(() => {
+          const kind = document.getElementById("kind");
+          kind.value = "transaction";
+          kind.dispatchEvent(new Event("change"));
+          document.getElementById("query").value = "${TX_HASH}";
+          document.getElementById("lookup").requestSubmit();
+          return true;
+        })()`,
+      );
+      await waitFor(session, `document.getElementById("result").innerText.includes("Transaction")`);
+      const transactionText = await session.evaluate<string>(`document.getElementById("result").innerText`);
+      assert.match(transactionText, /Transaction 0x1212/);
+      assert.match(transactionText, /succeeded/);
+      assert.match(transactionText, /From\s+0xaaaa/i);
+      assert.match(transactionText, /To\s+0xa0b8/i);
+      assert.match(transactionText, /Value\s+1 ETH/);
+      assert.match(transactionText, /Block\s+19,000,000/);
+      assert.match(transactionText, /Confirmations\s+2/);
+      assert.match(transactionText, /Fee\s+0\.000021 ETH/);
+      assert.match(await session.evaluate<string>("location.search"), /type=transaction/);
+
+      await session.evaluate(
+        `(() => {
+          const kind = document.getElementById("kind");
+          kind.value = "address";
+          kind.dispatchEvent(new Event("change"));
+          document.getElementById("query").value = "${TOKEN}";
+          document.getElementById("lookup").requestSubmit();
+          return true;
+        })()`,
+      );
+      await waitFor(session, `document.getElementById("result").innerText.includes("Balance")`);
+      const addressText = await session.evaluate<string>(`document.getElementById("result").innerText`);
+      assert.match(addressText, /Balance\s+0 ETH/);
+      assert.match(addressText, /Nonce\s+1/);
+      assert.match(addressText, /Contract\s+yes · 5 bytes of code/);
+      assert.match(await session.evaluate<string>("location.search"), /type=address/);
 
       await session.evaluate(
         `(() => {
