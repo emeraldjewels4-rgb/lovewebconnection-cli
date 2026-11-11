@@ -1875,6 +1875,33 @@ summarisation, and call-command ABI loading,
 argument coercion, and output formatting. It makes no RPC calls and starts no
 timers.
 
+### CI and the browser test
+
+`.github/workflows/tests.yml` runs on every push and pull request: install from
+the lockfile, typecheck, build and check the emitted `dist/` entries, install
+Chrome, then test. `npm test` includes `src/explorer-browser.test.ts`, which
+drives the real explorer page in headless Chrome over the DevTools protocol
+against a loopback stub server; it is the only test that needs a browser, and it
+makes no external RPC calls. It skips itself when no Chrome, Edge or Chromium is
+found.
+
+CI runs that file in its own step under `timeout 180`, after the rest of the
+suite has run with `LWC_SKIP_BROWSER=1`. A stuck browser therefore fails the
+browser step in three minutes with its log instead of holding the parallel suite
+open until the job timeout, and the suite step fails unless exactly that one test
+is skipped, so another silently skipped test still turns the workflow red. The
+test prints `[explorer-browser]` stage markers and exits at 150s if it stalls;
+those markers are where to look when the step fails.
+
+Run it locally with the rest of the suite, or on its own with a named browser:
+
+```bash
+npm test                                             # everything, browser included
+node --test src/explorer-browser.test.ts             # just the browser test
+CHROME_PATH="/path/to/chrome" node --test src/explorer-browser.test.ts
+LWC_SKIP_BROWSER=1 npm test                          # skip only the browser file
+```
+
 ## Next step
 
 To prove the connection end to end, run `npm run chain` with real values. If the
