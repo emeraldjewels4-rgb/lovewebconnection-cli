@@ -118,13 +118,44 @@ function syncKind() {
   $("query").placeholder = placeholder;
 }
 
-/** Put the current lookup in the address bar so it can be shared or reloaded. */
+/** Put the lookup in history so it can be shared, reloaded or revisited. */
 function syncUrl(chain, kind, query) {
   const url = new URL(location.href);
   url.searchParams.set("chain", chain.name);
   url.searchParams.set("type", kind);
   url.searchParams.set("q", query);
-  history.replaceState(null, "", url.toString());
+  if (url.toString() === location.href) return;
+  history.pushState(null, "", url.toString());
+}
+
+function readParams() {
+  const params = new URLSearchParams(location.search);
+  return {
+    chain: params.get("chain"),
+    type: params.get("type"),
+    query: params.get("q") || params.get("query"),
+  };
+}
+
+/** Apply a URL's lookup to the form and, when asked, run it without a new entry. */
+function applyParams(params, run) {
+  if (params.chain && state.chains.some((chain) => chain.name === params.chain)) {
+    selectChain(params.chain);
+  }
+  if (params.type && KIND_HINTS[params.type]) {
+    $("kind").value = params.type;
+  } else {
+    $("kind").value = "auto";
+  }
+  syncKind();
+  $("query").value = params.query || "";
+
+  if (!params.query) {
+    $("result").hidden = true;
+    $("status").textContent = "";
+    return;
+  }
+  if (run) void performLookup({ push: false });
 }
 
 function hostOf(url) {
@@ -477,8 +508,7 @@ async function showContract(chain, address) {
   renderResult(`Contract ${short(address, 8)}`, chain.name, rows);
 }
 
-async function submit(event) {
-  event.preventDefault();
+async function performLookup({ push = true } = {}) {
   const chain = state.chains.find((row) => row.name === $("chain").value);
   const query = $("query").value.trim();
   const status = $("status");
@@ -522,7 +552,7 @@ async function submit(event) {
     return;
   }
 
-  syncUrl(chain, kind, query);
+  if (push) syncUrl(chain, kind, query);
   $("go").disabled = true;
   status.textContent = `reading ${chain.name}…`;
   try {
@@ -546,6 +576,11 @@ async function submit(event) {
   } finally {
     $("go").disabled = false;
   }
+}
+
+async function submit(event) {
+  event.preventDefault();
+  await performLookup();
 }
 
 async function probeAll() {
@@ -572,27 +607,24 @@ async function boot() {
     return;
   }
 
-  const params = new URLSearchParams(location.search);
-  const wantedChain = params.get("chain");
-  const wantedType = params.get("type");
-  const wantedQuery = params.get("q") || params.get("query");
-
+  const initial = readParams();
   state.selected =
-    wantedChain && state.chains.some((chain) => chain.name === wantedChain)
-      ? wantedChain
+    initial.chain && state.chains.some((chain) => chain.name === initial.chain)
+      ? initial.chain
       : state.chains[0].name;
   renderOptions();
   renderChains({});
 
   $("kind").addEventListener("change", syncKind);
-  if (wantedType && KIND_HINTS[wantedType]) $("kind").value = wantedType;
+  if (initial.type && KIND_HINTS[initial.type]) $("kind").value = initial.type;
   syncKind();
   $("lookup").addEventListener("submit", submit);
+  window.addEventListener("popstate", () => applyParams(readParams(), true));
   await probeAll();
 
-  if (wantedQuery) {
-    $("query").value = wantedQuery;
-    $("lookup").requestSubmit();
+  if (initial.query) {
+    $("query").value = initial.query;
+    await performLookup({ push: false });
   }
 }
 

@@ -32,7 +32,8 @@ Rerun this after changing `CHAIN_PRESETS` in `src/chain.ts`. The page and
 
 Every lookup is written into the address bar as `chain`, `type` and `q`, for
 example `?chain=ethereum&type=token&q=0xA0b8…eB48`. Opening that URL selects the
-chain and mode and runs the lookup on load.
+chain and mode and runs the lookup on load. Each lookup is a history entry, so
+browser back and forward move between them and re-run the one in the URL.
 
 ## Run locally
 
@@ -55,7 +56,7 @@ endpoint that sends no CORS header.
    visible).
 4. Open `https://<your-domain>/explorer/`.
 
-`index.html` loads `app.js?v=3`. The parent site marks `.js` files immutable for
+`index.html` loads `app.js?v=4`. The parent site marks `.js` files immutable for
 a year, so bump that number whenever `app.js` changes; otherwise a browser that
 loaded the old script keeps running it.
 
