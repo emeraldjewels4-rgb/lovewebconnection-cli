@@ -171,7 +171,7 @@
       </p>
 
       <h2>
-        Coins in MySQL, refreshed from Blockchair
+        Coins in MySQL, refreshed from Blockchair and chain APIs
         <span class="note" id="coins-status" style="text-transform:none; letter-spacing:0">reading…</span>
       </h2>
       <table id="coins-db">
@@ -216,8 +216,8 @@
         Every currency <span class="mono">/api/markets</span> carries, in the position it
         publishes — one response for the whole list, not one request per coin. The table
         above is a different set: the seventeen chains this host reads from MySQL. Every row links to Blockchair
-        where that chain is supported there, including Monero; the rest link to their
-        CoinGecko market page. Where the host reads the chain, the row also carries that chain's latest Blockchair block height and mempool from <span class="mono">/api/web9999/coins</span>, so the market list needs no per-row request.
+        where that chain is supported there, including Monero; Bitcoin SV, Tezos, Tron, and EOS link to
+        WhatsOnChain, TzKT, Tronscan, and Bloks, and the rest link to their CoinGecko market page. Where the host reads the chain, the row also carries that chain's latest block height and mempool from <span class="mono">/api/web9999/coins</span>, so the market list needs no per-row request.
       </p>
 
       <ul class="links">
@@ -558,7 +558,8 @@
 
         const name = document.createElement('td');
         const chainLink = document.createElement('a');
-        chainLink.href = 'https://blockchair.com/' + encodeURIComponent(String(row.chain ?? ''));
+        const provider = PROVIDER_CHAINS.get(String(row.symbol ?? '').toUpperCase());
+        chainLink.href = provider?.url ?? 'https://blockchair.com/' + encodeURIComponent(String(row.chain ?? ''));
         chainLink.textContent = row.name ?? row.chain ?? '—';
         chainLink.target = '_blank';
         chainLink.rel = 'noopener';
@@ -667,7 +668,6 @@
         ['BTC', 'bitcoin'],
         ['ETH', 'ethereum'],
         ['BCH', 'bitcoin-cash'],
-        ['BSV', 'bitcoin-sv'],
         ['LTC', 'litecoin'],
         ['DOGE', 'dogecoin'],
         ['DASH', 'dash'],
@@ -678,9 +678,13 @@
         ['XRP', 'ripple'],
         ['XLM', 'stellar'],
         ['ADA', 'cardano'],
-        ['XTZ', 'tezos'],
-        ['TRX', 'tron'],
-        ['EOS', 'eos'],
+      ]);
+
+      const PROVIDER_CHAINS = new Map([
+        ['BSV', { url: 'https://whatsonchain.com/', label: 'WhatsOnChain' }],
+        ['XTZ', { url: 'https://tzkt.io/', label: 'TzKT' }],
+        ['TRX', { url: 'https://tronscan.org/', label: 'Tronscan' }],
+        ['EOS', { url: 'https://bloks.io/', label: 'Bloks' }],
       ]);
 
       function marketRow(coin) {
@@ -713,10 +717,15 @@
         const source = document.createElement('td');
         source.className = 'mono';
         const link = document.createElement('a');
-        const slug = BLOCKCHAIR_CHAINS.get(String(coin.symbol ?? '').toUpperCase());
+        const symbolCode = String(coin.symbol ?? '').toUpperCase();
+        const slug = BLOCKCHAIR_CHAINS.get(symbolCode);
+        const provider = PROVIDER_CHAINS.get(symbolCode);
         if (slug) {
           link.href = 'https://blockchair.com/' + slug;
           link.textContent = 'Blockchair';
+        } else if (provider) {
+          link.href = provider.url;
+          link.textContent = provider.label;
         } else {
           link.href = 'https://www.coingecko.com/en/coins/' + encodeURIComponent(String(coin.id ?? ''));
           link.textContent = 'Market';
@@ -905,8 +914,8 @@
           : shown + ' of ' + marketsState.coins.length;
         const chains =
           marketsState.chains > 0
-            ? marketsState.chains + ' Blockchair chains'
-            : 'no Blockchair stats';
+            ? marketsState.chains + ' host chains'
+            : 'no host stats';
         status.textContent =
           scope + ' · ' + chains + ' · ' + marketsState.source + ' · ' + marketsState.when;
 
