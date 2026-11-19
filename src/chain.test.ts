@@ -169,6 +169,50 @@ test("an explicit preset ignores env values configured for another chain", () =>
   assert.equal(config.nativeCurrency.symbol, "ETH");
 });
 
+test("a preset chosen with --chain never receives the env credential", () => {
+  // The key is for the xlayer endpoint .env names; --chain moves the probe to
+  // ethereum's public node, which was never issued the credential.
+  const config = parseChainConfig(
+    { LWC_CHAIN: "xlayer", LWC_RPC_AUTH: "Bearer paid-endpoint-key" },
+    "ethereum",
+  );
+
+  assert.equal(config.rpcUrl, "https://ethereum-rpc.publicnode.com");
+  assert.equal(
+    config.authHeader,
+    null,
+    "a credential issued for one operator is not sent to another",
+  );
+  assert.equal(config.authDroppedHost, "ethereum-rpc.publicnode.com");
+  assert.ok(
+    connectionWarnings(config).some((w) => /LWC_RPC_AUTH was not sent to/.test(w)),
+    "the drop is reported instead of the credential silently disappearing",
+  );
+});
+
+test("a credential with no configured endpoint is not lent to a preset", () => {
+  const config = parseChainConfig({ LWC_RPC_AUTH: "Bearer paid-endpoint-key" }, "base");
+
+  assert.equal(config.rpcUrl, "https://mainnet.base.org");
+  assert.equal(config.authHeader, null);
+  assert.equal(config.authDroppedHost, "mainnet.base.org");
+});
+
+test("the credential survives a --chain selector that keeps its own endpoint", () => {
+  const config = parseChainConfig(
+    {
+      LWC_CHAIN_ID: "196",
+      LWC_RPC_URL: "https://xlayer.example.org",
+      LWC_RPC_AUTH: "Bearer paid-endpoint-key",
+    },
+    "xlayer",
+  );
+
+  assert.equal(config.rpcUrl, "https://xlayer.example.org");
+  assert.equal(config.authHeader, "Bearer paid-endpoint-key");
+  assert.equal(config.authDroppedHost, null);
+});
+
 test("an explicit preset still uses an endpoint for the same chain", () => {
   const config = parseChainConfig(
     { LWC_CHAIN_ID: "196", LWC_RPC_URL: "https://xlayer.example.org" },

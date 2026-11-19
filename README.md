@@ -184,8 +184,11 @@ Six chains are built in, so checking them needs no configuration:
 Every preset has a backup endpoint from a different operator. When the default
 endpoint is unreachable, times out, or answers with the wrong chain id, `lwc
 chain` and `lwc presets` retry against the backup and report which one answered
-instead of failing outright. A configured `LWC_RPC_AUTH` disables the failover:
-a credential is only ever sent to the operator it was issued for.
+instead of failing outright. A configured `LWC_RPC_AUTH` disables the failover,
+and a credential is only ever sent to the operator it was issued for: when
+`--chain` selects another network's preset, the header is withheld from that
+preset's endpoint and a warning names it, rather than handing the key to a
+public node.
 
 A custom chain, or a private endpoint configured in `.env`, names its own backup
 with `LWC_FALLBACK_RPC_URL`. For a preset it replaces the preset's backup, and it
@@ -414,7 +417,9 @@ preset uses its own endpoint and does not inherit a `LWC_CHAIN_ID` or
 `LWC_RPC_URL` configured for a different network. When the two agree, the env
 values still win over the preset's defaults — `LWC_RPC_URL` swaps in your
 endpoint (add `LWC_RPC_AUTH` if it needs a bearer token), and `LWC_CHAIN_NAME`
-and `LWC_NATIVE_SYMBOL` relabel output. Any other network is a custom chain: set
+and `LWC_NATIVE_SYMBOL` relabel output. The credential belongs to that endpoint:
+switching to another network with `--chain` withholds `LWC_RPC_AUTH` and says so,
+so a key configured for a private node never follows the selector to a preset. Any other network is a custom chain: set
 `LWC_CHAIN_ID` and `LWC_RPC_URL`, or pass the id to `--chain` and keep only
 `LWC_RPC_URL`. The chain-id check applies either way, and `LWC_CHAIN` paired
 with a conflicting `LWC_CHAIN_ID` is rejected instead of silently preferring

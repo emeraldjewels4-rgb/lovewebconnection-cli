@@ -13,6 +13,12 @@ export interface ChainConfig {
   nativeCurrency: { name: string; symbol: string; decimals: number };
   /** Authorization header value for the RPC, or null when unauthenticated. */
   authHeader: string | null;
+  /**
+   * Host that `LWC_RPC_AUTH` was withheld from, or null. Set when the endpoint
+   * in use is not the one the credential was configured for, so the drop is
+   * reported rather than silent.
+   */
+  authDroppedHost?: string | null;
   timeoutMs: number;
   /** Name of the built-in preset this config came from, or null for a custom chain. */
   preset: string | null;
@@ -180,7 +186,9 @@ function parseChainId(raw: string): number {
 /**
  * Build the chain config from a preset name, a chain id, or explicit
  * LWC_CHAIN_ID/LWC_RPC_URL values. An explicit selector (the --chain flag)
- * wins over LWC_CHAIN.
+ * wins over LWC_CHAIN. A selector that moves the endpoint away from the one
+ * `.env` configured also withholds LWC_RPC_AUTH, since that credential was
+ * issued for the configured operator, not for the preset's public node.
  */
 export function parseChainConfig(
   env: Record<string, string | undefined>,
@@ -239,12 +247,22 @@ export function parseChainConfig(
   }
   validateRpcUrl(rpcUrl, "LWC_RPC_URL");
 
-  const authHeader = env.LWC_RPC_AUTH?.trim() || null;
-  if (authHeader && /[\r\n]/.test(authHeader)) {
+  // The credential belongs to the endpoint `.env` configured, whether it named
+  // one outright or through LWC_CHAIN; a preset picked by `--chain` is another
+  // operator's endpoint and must not receive it. Nothing configured at all is
+  // not an owner either, so an ad-hoc preset does not inherit the header.
+  const envPreset = env.LWC_CHAIN?.trim() ? resolveChainPreset(env.LWC_CHAIN.trim()) : null;
+  const credentialEndpoint = envRpcUrl ?? envPreset?.rpcUrl ?? null;
+
+  const configuredAuth = env.LWC_RPC_AUTH?.trim() || null;
+  if (configuredAuth && /[\r\n]/.test(configuredAuth)) {
     throw new ChainConfigError(
       "LWC_RPC_AUTH must be a single line and must not contain newlines.",
     );
   }
+  const authHeader = configuredAuth !== null && credentialEndpoint === rpcUrl ? configuredAuth : null;
+  const authDroppedHost =
+    configuredAuth !== null && authHeader === null ? new URL(rpcUrl).host : null;
 
   const rawTimeout = env.LWC_TIMEOUT_MS?.trim();
   const timeoutMs = rawTimeout ? Number(rawTimeout) : DEFAULT_TIMEOUT_MS;
@@ -291,6 +309,7 @@ export function parseChainConfig(
     fallbackRpcUrl,
     nativeCurrency: { name: symbol, symbol, decimals: 18 },
     authHeader,
+    authDroppedHost,
     timeoutMs,
     preset: preset?.name ?? null,
   };
@@ -344,6 +363,12 @@ export function connectionWarnings(config: ChainConfig): string[] {
         `${key} uses plaintext http to ${endpoint.hostname}; RPC traffic is unencrypted. Use https.`,
       );
     }
+  }
+  if (config.authDroppedHost) {
+    warnings.push(
+      `LWC_RPC_AUTH was not sent to ${config.authDroppedHost}: it is configured for ` +
+        "another endpoint. Set LWC_RPC_URL for the chain you are probing, or unset LWC_RPC_AUTH.",
+    );
   }
   if (config.authHeader) {
     warnings.push(
