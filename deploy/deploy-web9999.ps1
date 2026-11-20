@@ -405,14 +405,40 @@ if ($DryRun) {
 
 Write-Host ('  binding    {0} ({1})' -f $bindMode, $bindNote)
 Write-Host ('  uploading to {0} on SSH {1} - enter the password if no key is configured' -f $remoteUser, $portLabel)
-& scp @scpOptions $bundle ($remoteUser + ':' + $remoteZip)
-if ($LASTEXITCODE -ne 0) { throw ('scp of the bundle failed (exit {0})' -f $LASTEXITCODE) }
+# scp authenticates on its own, so the login can fail here even though the preflight above passed:
+# that preflight runs in BatchMode and reports the password case as "continuing", and scp then asks
+# for one. A rejected password arrives as "Permission denied" on stderr, and with the preference at
+# Stop that stderr became a terminating error - so the run ended in a CategoryInfo dump under exit 1,
+# which reads as a crash rather than a credential the deploy never got. One REFUSED line, exit 2.
+function Send-File {
+  param([string]$Path, [string]$Target, [string]$What)
+  $said = ''
+  $savedEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $said = (@(& scp @scpOptions $Path $Target 2>&1) | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -Last 2) -join ' '
+    $code = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $savedEap
+  }
+  if ($code -eq 0) { return }
+  if ($said -match '(?i)permission denied|password') {
+    Write-Host ('  REFUSED: the login failed when scp sent the {0} - the credential was rejected, so no byte of it was uploaded. scp said: {1}' -f $What, $said)
+    Write-Host '  nothing was uploaded and nothing was installed on the server.'
+    Write-Host ('  the preflight passed because it never prompts; scp does. Re-run and type the password, or put this machine''s key in the account''s authorized_keys on {0} and pass -KeyFile.' -f $VpsHost)
+    exit 2
+  }
+  if ($said -match '(?i)host key verification failed') {
+    Write-Host ('  REFUSED: the host key for {0} is not the one known_hosts already holds - the server was rebuilt, or something is answering as it. scp said: {1}' -f $VpsHost, $said)
+    Write-Host ('  if the rebuild is real, drop the old key and let ssh record the new one: ssh-keygen -R {0}' -f $VpsHost)
+    exit 2
+  }
+  throw ('scp of the {0} failed (exit {1}): {2}' -f $What, $code, $said)
+}
 
-& scp @scpOptions $installer ($remoteUser + ':' + $remoteInstaller)
-if ($LASTEXITCODE -ne 0) { throw ('scp of the installer failed (exit {0})' -f $LASTEXITCODE) }
-
-& scp @scpOptions $proxy ($remoteUser + ':' + $remoteProxy)
-if ($LASTEXITCODE -ne 0) { throw ('scp of the proxy script failed (exit {0})' -f $LASTEXITCODE) }
+Send-File $bundle ($remoteUser + ':' + $remoteZip) 'bundle'
+Send-File $installer ($remoteUser + ':' + $remoteInstaller) 'installer'
+Send-File $proxy ($remoteUser + ':' + $remoteProxy) 'proxy script'
 
 Write-Host '  installing on the server'
 & ssh @sshOptions $remoteUser $installCommand
