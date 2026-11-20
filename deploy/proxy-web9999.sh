@@ -310,7 +310,6 @@ if [ "$DRYRUN" = 1 ]; then
   say '    static     not forwarded - served from the bundle, never from this rule:'
   printf '      %-26s -> %s\n' '/' 'index.html'
   printf '      %-26s -> %s\n' '/networks.json' 'networks.json'
-  printf '      %-26s -> %s\n' '/web9999/networks.json' 'the same file, for a page that asks for the absolute path'
   say '    checks     nginx present, the site block exists, the upstream answers JSON (before any change)'
   say "    then       GET http://127.0.0.1:$WEB_PORT/api/web9999/coins and report what came back"
   exit 0

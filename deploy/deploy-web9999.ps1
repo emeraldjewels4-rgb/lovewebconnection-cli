@@ -317,13 +317,10 @@ try {
   & node $generator
   if ($LASTEXITCODE -ne 0) { throw ('generating networks.json failed (exit {0}) - run npm run build, then retry' -f $LASTEXITCODE) }
   Copy-Item (Join-Path $siteDir 'index.html') $stage
+  # One copy, beside index.html. The page fetches "networks.json" relative to itself, so that single
+  # entry serves both the domain root and a subdirectory deploy; the old absolute
+  # /web9999/networks.json copy is gone with the bundle that carried two.
   Copy-Item (Join-Path $siteDir 'networks.json') $stage
-  # A second copy under web9999/: a page deployed before this change asks for the absolute
-  # /web9999/networks.json, and a browser still running that index.html would 404 against a
-  # root-only file. One generated file, two paths, so no version of the page can miss it.
-  $compatDir = Join-Path $stage 'web9999'
-  New-Item -ItemType Directory -Path $compatDir -Force | Out-Null
-  Copy-Item (Join-Path $siteDir 'networks.json') $compatDir
   if (Test-Path $apiDir) { Copy-Item $apiDir (Join-Path $stage 'api') -Recurse }
   Copy-Item (Join-Path $PSScriptRoot 'serve.mjs') $stage
   if (Test-Path $bundle) { Remove-Item $bundle -Force }
@@ -337,10 +334,10 @@ try {
   $archive = [System.IO.Compression.ZipFile]::OpenRead($bundle)
   try { $entries = @($archive.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }) }
   finally { $archive.Dispose() }
-  if ($entries -notcontains 'networks.json' -or $entries -notcontains 'web9999/networks.json') {
-    throw ('the bundle needs networks.json beside index.html and again at web9999/networks.json, which the chain table is fetched from (it has: {0})' -f ($entries -join ', '))
+  if ($entries -notcontains 'networks.json') {
+    throw ('the bundle needs networks.json beside index.html, which is where the page fetches it (it has: {0})' -f ($entries -join ', '))
   }
-  Write-Host '    bundle contains networks.json beside index.html and at web9999/networks.json'
+  Write-Host '    bundle contains networks.json beside index.html'
   Write-Host ('  bundle: {0} ({1:N0} bytes)' -f $bundle, (Get-Item $bundle).Length)
 } finally {
   Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue

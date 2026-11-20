@@ -259,7 +259,6 @@ if (-not $Remove) {
     Write-Host '    static     not forwarded - served from the bundle, never from this rule:'
     Write-Host ('      {0,-26} -> {1}' -f '/', 'index.html')
     Write-Host ('      {0,-26} -> {1}' -f '/networks.json', 'networks.json')
-    Write-Host ('      {0,-26} -> {1}' -f '/web9999/networks.json', 'the same file, for a page that asks for the absolute path')
     Write-Host '    checks     URL Rewrite module, ARR proxy section, IIS site named web9999 (before any change)'
     Write-Host ('    then       GET http://127.0.0.1:{0}/api/web9999/coins and report what came back' -f $WebPort)
     exit 0
