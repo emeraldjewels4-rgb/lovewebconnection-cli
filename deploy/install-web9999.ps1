@@ -8,7 +8,10 @@
 # Loopback is the default because exposure should be a decision, not a side effect of running an
 # installer. Switching modes on an existing site is handled: the old binding for that port is
 # removed, so a site installed as public does not keep answering publicly after being reinstalled
-# as loopback.
+# as loopback - but only when the run asks for it. An existing site whose exposure differs from
+# -Bind is not switched silently: the installer prints exactly what it would close or open,
+# changes nothing, and exits 2 until -AllowRebind is passed. A routine deploy that forgets -Bind
+# therefore stops and says so instead of taking a public site offline.
 #
 # Files: by default the site directory is replaced, so a file dropped from the bundle also
 # disappears from the server, which is what stops a deploy from leaving two half-versions on disk.
@@ -21,12 +24,16 @@
 # also run it by hand after copying the zip across:
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install-web9999.ps1 -Bind 0.0.0.0
+#   powershell -NoProfile -ExecutionPolicy Bypass -File install-web9999.ps1 -Bind 0.0.0.0 -AllowRebind
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install-web9999.ps1 -NoClobber
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install-web9999.ps1 -DryRun
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install-web9999.ps1 -SelfTest
 #
+# Exit codes: 0 done, 1 the selftest failed, 2 refused to change how the site is exposed without
+# -AllowRebind (nothing was changed: no files, no binding, no firewall rule).
+#
 # Why IIS and not a Node server: IIS is already installed and already serving on :80, so the
-# site needs no runtime download, no service wrapper and no startup entry of its own — IIS
+# site needs no runtime download, no service wrapper and no startup entry of its own - IIS
 # starts at boot and the binding on the port comes back with it. Everything here is idempotent:
 # re-running updates the files in place and leaves the site, pool and firewall rule alone.
 [CmdletBinding()]
@@ -38,6 +45,7 @@ param(
   [string]$Zip = (Join-Path $env:USERPROFILE 'web9999-site.zip'),
   [string]$SiteName = 'web9999',
   [switch]$NoClobber,
+  [switch]$AllowRebind,
   [switch]$DryRun,
   [switch]$SelfTest
 )
@@ -56,6 +64,53 @@ function Get-BindingPlan {
   $remove = @($onPort | Where-Object { ($_ -split ':')[0] -ne $Address })
 
   [pscustomobject]@{ OnPort = $onPort; Keep = $keep; Remove = $remove; Add = ($keep.Count -eq 0) }
+}
+
+# Whether this run would change how the site is reachable, and what that means in plain terms.
+# A site that is not yet installed is not a switch: a first install may bind either way without
+# -AllowRebind. What counts is an existing site on this port that answers somewhere the run did
+# not ask for - including the firewall, which is what makes a public site reachable at all.
+function Get-ExposureChange {
+  param([string[]]$Current, [string]$Address, [int]$Port, [bool]$FirewallOpen, [string]$HostAddress)
+
+  $plan = Get-BindingPlan -Current $Current -Address $Address -Port $Port
+  $onPort = $plan.OnPort.Count -gt 0
+  $requestedPublic = $Address -eq '*'
+  $differs = $onPort -and ($plan.Add -or $plan.Remove.Count -gt 0 -or ($requestedPublic -ne $FirewallOpen))
+
+  # Name the URL an operator recognises: '*:8782:' means every interface, so show the address
+  # this host actually answers on when one can be found.
+  $shown = { param($bindAddress) if ($bindAddress -eq '*' -and $HostAddress) { $HostAddress } else { $bindAddress } }
+
+  $effects = New-Object System.Collections.Generic.List[string]
+  if ($onPort) {
+    foreach ($stale in $plan.Remove) {
+      $from = (& $shown (($stale -split ':')[0]))
+      $effects.Add(("close   http://{0}:{1}/  (removes binding {2})" -f $from, $Port, $stale))
+    }
+    if ($plan.Add) {
+      $effects.Add(("open    http://{0}:{1}/  (adds binding {2}:{1}:)" -f (& $shown $Address), $Port, $Address))
+    }
+    if ($requestedPublic -and -not $FirewallOpen) {
+      $effects.Add(("open    inbound TCP {0}  (adds firewall rule 'web9999 {0}')" -f $Port))
+    }
+    if (-not $requestedPublic -and $FirewallOpen) {
+      $effects.Add(("close   inbound TCP {0}  (removes firewall rule 'web9999 {0}')" -f $Port))
+    }
+  }
+
+  [pscustomobject]@{ Plan = $plan; OnPort = $onPort; Differs = $differs; Effects = $effects.ToArray() }
+}
+
+# What this host has right now. Only callable once WebAdministration is loaded.
+function Get-CurrentExposure {
+  param([string]$Name, [int]$Port)
+  $site = Get-Website -Name $Name -ErrorAction SilentlyContinue
+  $bindings = if ($site) {
+    @(Get-WebBinding -Name $Name -Protocol http -ErrorAction SilentlyContinue | ForEach-Object { $_.bindingInformation })
+  } else { @() }
+  $rule = Get-NetFirewallRule -DisplayName "web9999 $Port" -ErrorAction SilentlyContinue
+  [pscustomobject]@{ Site = $site; Bindings = $bindings; FirewallOpen = [bool]$rule }
 }
 
 # Puts the bundle on disk, in one of two ways. Extracted rather than inlined into the install
@@ -146,6 +201,33 @@ if ($SelfTest) {
   $plan = Get-BindingPlan -Current @('*:87820:') -Address '127.0.0.1' -Port 8782
   Check 'a longer port number is not mistaken for this one' ($plan.Remove.Count) '0'
 
+  # The gate. An existing site that answers somewhere other than the requested address is a
+  # change, and the effects are what the operator is shown before anything moves.
+  $change = Get-ExposureChange -Current @('*:8782:') -Address '127.0.0.1' -Port 8782 -FirewallOpen $true -HostAddress '108.181.154.182'
+  Check 'public site, loopback requested: this is a change' $change.Differs 'True'
+  Check 'and it names the public URL and the port it closes' ("{0}/{1}" -f $change.Effects.Count, ($change.Effects[0] -like '*108.181.154.182:8782*')) '3/True'
+  Check 'and the firewall close is one of them' (($change.Effects -join ' ') -like '*removes firewall rule*') 'True'
+
+  $change = Get-ExposureChange -Current @('127.0.0.1:8782:') -Address '*' -Port 8782 -FirewallOpen $false -HostAddress '108.181.154.182'
+  Check 'loopback site, public requested: this is a change too' $change.Differs 'True'
+  Check 'and it opens the public URL' (($change.Effects -join ' ') -like '*open*108.181.154.182:8782*') 'True'
+  Check 'and opens the firewall port' (($change.Effects -join ' ') -like '*adds firewall rule*') 'True'
+
+  $change = Get-ExposureChange -Current @('127.0.0.1:8782:') -Address '127.0.0.1' -Port 8782 -FirewallOpen $false -HostAddress '108.181.154.182'
+  Check 'loopback reinstalled as loopback: nothing changes' ("{0}/{1}" -f $change.Differs, $change.Effects.Count) 'False/0'
+
+  $change = Get-ExposureChange -Current @('*:8782:') -Address '*' -Port 8782 -FirewallOpen $true -HostAddress '108.181.154.182'
+  Check 'public reinstalled as public: nothing changes' ("{0}/{1}" -f $change.Differs, $change.Effects.Count) 'False/0'
+
+  $change = Get-ExposureChange -Current @() -Address '*' -Port 8782 -FirewallOpen $false -HostAddress '108.181.154.182'
+  Check 'a first install is not a switch, either direction' $change.Differs 'False'
+
+  $change = Get-ExposureChange -Current @('127.0.0.1:8782:') -Address '127.0.0.1' -Port 8782 -FirewallOpen $true -HostAddress '108.181.154.182'
+  Check 'loopback but the port is open: closing it needs the flag too' ("{0}/{1}" -f $change.Differs, $change.Effects.Count) 'True/1'
+
+  $change = Get-ExposureChange -Current @('*:80:') -Address '127.0.0.1' -Port 8782 -FirewallOpen $false -HostAddress '108.181.154.182'
+  Check 'a site on :80 does not make :8782 a change' $change.Differs 'False'
+
   # The copy rule, against a real zip and a real directory: no IIS, no network, no server.
   $temp = Join-Path ([System.IO.Path]::GetTempPath()) ('web9999-selftest-' + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $temp -Force | Out-Null
@@ -203,6 +285,15 @@ $isPublic = $Bind -eq '0.0.0.0'
 $iisAddress = if ($isPublic) { '*' } else { $Bind }
 $bindingInformation = '{0}:{1}:' -f $iisAddress, $WebPort
 $firewallAction = if ($isPublic) { 'open inbound TCP ' + $WebPort } else { 'leave the port closed to outside' }
+$ruleName = "web9999 $WebPort"
+
+# The host's own IPv4 address, so what is being closed or opened can be named as a URL rather
+# than as IIS's '*', which means little to whoever is reading the refusal.
+$hostAddress = try {
+  (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+    Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+    Select-Object -First 1).IPAddress
+} catch { $null }
 
 if ($DryRun) {
   Write-Host '  DRY RUN - nothing installed, nothing changed. The plan for this host:'
@@ -216,10 +307,54 @@ if ($DryRun) {
   } else {
     Write-Host ('    public     none; browse through a tunnel: ssh -N -L {0}:127.0.0.1:{0} <user>@<server>' -f $WebPort)
   }
+
+  # What the host has now, when this machine can be asked at all. A dry run on a laptop that is
+  # not the server says so instead of guessing.
+  $current = try {
+    Import-Module WebAdministration -ErrorAction Stop
+    Get-CurrentExposure -Name $SiteName -Port $WebPort
+  } catch { $null }
+  if ($null -eq $current) {
+    Write-Host '    current    unknown here (no IIS on this host)'
+  } else {
+    $now = if ($current.Bindings.Count -gt 0) { $current.Bindings -join ', ' } else { 'nothing bound on this port' }
+    Write-Host ('    current    {0}{1}' -f $now, $(if ($current.FirewallOpen) { ', inbound port open' } else { ', port closed' }))
+    $change = Get-ExposureChange -Current $current.Bindings -Address $iisAddress -Port $WebPort -FirewallOpen $current.FirewallOpen -HostAddress $hostAddress
+    if (-not $change.Differs) {
+      Write-Host '    exposure   unchanged'
+    } elseif ($AllowRebind) {
+      Write-Host '    exposure   changes, allowed by -AllowRebind:'
+      foreach ($effect in $change.Effects) { Write-Host ('                 ' + $effect) }
+    } else {
+      Write-Host '    exposure   would change, and the real run would REFUSE without -AllowRebind:'
+      foreach ($effect in $change.Effects) { Write-Host ('                 ' + $effect) }
+    }
+  }
   exit 0
 }
 
 if (-not (Test-Path -LiteralPath $Zip)) { throw "bundle not found: $Zip" }
+
+# The gate runs before a single file is written. A deploy that forgot -Bind ends with the site
+# exactly as it was and a list of what it would have closed - not with a public site taken offline.
+Import-Module WebAdministration -ErrorAction Stop
+$current = Get-CurrentExposure -Name $SiteName -Port $WebPort
+$change = Get-ExposureChange -Current $current.Bindings -Address $iisAddress -Port $WebPort -FirewallOpen $current.FirewallOpen -HostAddress $hostAddress
+
+if ($change.Differs) {
+  if (-not $AllowRebind) {
+    Write-Host '  REFUSED: this run would change how the site is exposed, and -AllowRebind was not passed.'
+    Write-Host ('    wanted     {0} on port {1}' -f $(if ($isPublic) { 'every interface (public)' } else { '127.0.0.1 (loopback only)' }), $WebPort)
+    Write-Host '    this run would:'
+    foreach ($effect in $change.Effects) { Write-Host ('      ' + $effect) }
+    Write-Host '  nothing was changed: no files written, no binding or firewall rule touched.'
+    Write-Host ('  to switch it on purpose: -Bind {0} -AllowRebind' -f $Bind)
+    Write-Host '  to leave it alone: nothing; it was not touched.'
+    exit 2
+  }
+  Write-Host '  exposure is changing, as -AllowRebind allows:'
+  foreach ($effect in $change.Effects) { Write-Host ('    ' + $effect) }
+}
 
 $copy = Install-Bundle -ZipPath $Zip -Destination $Root -NoClobber:$NoClobber
 if ($NoClobber) {
@@ -232,24 +367,20 @@ if ($NoClobber) {
   Write-Host ("  files: replaced the site directory ({0} files from the bundle)" -f $copy.Written)
 }
 
-Import-Module WebAdministration -ErrorAction Stop
-
 if (-not (Test-Path "IIS:\AppPools\$SiteName")) {
   New-WebAppPool -Name $SiteName | Out-Null
   Write-Host "  created app pool $SiteName"
 }
 
-$existing = Get-Website -Name $SiteName -ErrorAction SilentlyContinue
+$existing = $current.Site
 if ($existing) {
   Set-ItemProperty "IIS:\Sites\$SiteName" -Name physicalPath -Value $Root
 
-  $current = @(Get-WebBinding -Name $SiteName -Protocol http -ErrorAction SilentlyContinue | ForEach-Object { $_.bindingInformation })
-  $plan = Get-BindingPlan -Current $current -Address $iisAddress -Port $WebPort
-  foreach ($stale in $plan.Remove) {
+  foreach ($stale in $change.Plan.Remove) {
     Remove-WebBinding -Name $SiteName -BindingInformation $stale
     Write-Host "  removed binding $stale (the address for port $WebPort changed)"
   }
-  if ($plan.Add) {
+  if ($change.Plan.Add) {
     New-WebBinding -Name $SiteName -Protocol http -Port $WebPort -IPAddress $iisAddress | Out-Null
     Write-Host "  bound $bindingInformation"
   }
@@ -264,19 +395,17 @@ if ((Get-Website -Name $SiteName).State -ne 'Started') { Start-Website -Name $Si
 Set-ItemProperty "IIS:\Sites\$SiteName" -Name applicationDefaults.preloadEnabled -Value $true -ErrorAction SilentlyContinue
 
 # Inbound rule for the port. Windows Firewall blocks it by default and a site that is running
-# but unreachable is the failure this whole exercise is about — so the rule is opened for public
+# but unreachable is the failure this whole exercise is about - so the rule is opened for public
 # mode, and removed for loopback mode so a reinstall as tunnel-only does not leave the hole it
 # opened last time.
-$ruleName = "web9999 $WebPort"
-$rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
 if ($isPublic) {
-  if (-not $rule) {
+  if (-not $current.FirewallOpen) {
     New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP -LocalPort $WebPort -Action Allow -Profile Any | Out-Null
     Write-Host "  opened inbound TCP $WebPort"
   } else {
     Write-Host "  firewall rule already present"
   }
-} elseif ($rule) {
+} elseif ($current.FirewallOpen) {
   Remove-NetFirewallRule -DisplayName $ruleName
   Write-Host "  removed the inbound rule: loopback only, the port is closed to outside"
 } else {
@@ -290,7 +419,7 @@ $title = [regex]::Match($probe.Content, '<title>([^<]*)</title>').Groups[1].Valu
 Write-Host "  local check: HTTP $($probe.StatusCode), $($probe.RawContentLength) bytes, title '$title'"
 
 if ($isPublic) {
-  $address = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1).IPAddress
+  $address = if ($hostAddress) { $hostAddress } else { '<this-host>' }
   Write-Host "  bound to every interface: public URL http://${address}:$WebPort/"
   Write-Host "  no tunnel needed. A tunnel works too: ssh -N -L $WebPort`:127.0.0.1`:$WebPort <user>@<server>"
 } else {
