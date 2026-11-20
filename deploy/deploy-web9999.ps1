@@ -67,6 +67,7 @@ $remoteProxy = 'C:/Users/' + $User + '/proxy-web9999.ps1'
 $remoteProxyWindows = 'C:\Users\' + $User + '\proxy-web9999.ps1'
 
 if (-not (Test-Path (Join-Path $siteDir 'index.html'))) { throw "no web9999/index.html under $projectRoot" }
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'node is not on PATH: deploy/networks.mjs generates web9999/networks.json' }
 if (-not (Test-Path $proxy)) { throw "no proxy-web9999.ps1 next to this script: a deploy without it would leave the rails unproxied" }
 
 # The proxy's rules for -Upstream, applied here first: a bad origin should cost a second, not a
@@ -86,7 +87,14 @@ function Get-UpstreamOrigin {
   '{0}://{1}' -f $uri.Scheme, $uri.Authority
 }
 
-$upstreamOrigin = Get-UpstreamOrigin $Upstream
+# A bad origin is an operator mistake, not a crash. An uncaught throw exits 1 and prints the
+# exception with its CategoryInfo and a caret under the source line, which buries the one sentence
+# that says what to fix. Refuse in the proxy's own words instead: one line, exit 2, nothing built or
+# uploaded, so a -DryRun transcript reads the same as a failed real run.
+$upstreamOrigin = try { Get-UpstreamOrigin $Upstream } catch {
+  Write-Host ('  REFUSED: ' + $_.Exception.Message)
+  exit 2
+}
 
 # Built only when an origin was given; an empty string is the difference between "the rails were
 # configured" and "a command is printed for later". -WebPort is passed along so the proxy probes
@@ -195,7 +203,20 @@ function Show-Access {
 $stage = Join-Path ([System.IO.Path]::GetTempPath()) ('web9999-stage-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 try {
+  # networks.json is generated, never hand-edited: it is the page's chain table read from
+  # CHAIN_PRESETS in src/chain.ts. It belongs in the bundle at the path the page asks for,
+  # /web9999/networks.json - and not in the proxy rule, which forwards /api/* only. Generating it
+  # here, instead of trusting a committed copy, means the bundle cannot ship a table that
+  # disagrees with the presets this build came from.
+  & node (Join-Path $PSScriptRoot 'networks.mjs')
+  if ($LASTEXITCODE -ne 0) { throw ('generating networks.json failed (exit {0}) - run npm run build, then retry' -f $LASTEXITCODE) }
   Copy-Item (Join-Path $siteDir 'index.html') $stage
+  # The page asks for /web9999/networks.json absolutely and the site is bound at the root
+  # (New-Website -PhysicalPath C:\web9999, port 8782), so the file has to sit in a web9999
+  # directory under the site root - at the root itself that URL would 404.
+  $networksDir = Join-Path $stage 'web9999'
+  New-Item -ItemType Directory -Path $networksDir -Force | Out-Null
+  Copy-Item (Join-Path $siteDir 'networks.json') $networksDir
   if (Test-Path $apiDir) { Copy-Item $apiDir (Join-Path $stage 'api') -Recurse }
   Copy-Item (Join-Path $PSScriptRoot 'serve.mjs') $stage
   if (Test-Path $bundle) { Remove-Item $bundle -Force }
@@ -251,8 +272,19 @@ if ($LASTEXITCODE -ne 0) { throw ('remote install failed (exit {0})' -f $LASTEXI
 if ($proxyCommand) {
   Write-Host ('  configuring the rails proxy to {0}' -f $upstreamOrigin)
   & ssh @sshOptions $remoteUser $proxyCommand
-  if ($LASTEXITCODE -ne 0) {
-    throw ('remote proxy configuration failed (exit {0}): the page is installed but its rails are not proxied. Run proxy-web9999.ps1 on the server and read its output.' -f $LASTEXITCODE)
+  $proxyExit = $LASTEXITCODE
+  if ($proxyExit -ne 0) {
+    # proxy-web9999.ps1 tells two different failures apart, and the difference decides what to do
+    # next: 1 means the rule IS on the site and only the through-proxy request failed, 2 means it
+    # refused before Add-WebConfigurationProperty and changed nothing. Both fail this deploy, and
+    # neither is reported as the other.
+    if ($proxyExit -eq 1) {
+      throw ('remote proxy configuration failed (exit 1): the rule IS installed on the server and /api/* is proxied to {0}, but the through-proxy check failed, so the rails are not answering yet. proxy-web9999.ps1 printed what to check there (site, upstream, certificate, ARR); fix that rather than redeploying. Exit 1 is also what an uncaught remote error returns - if its output above has no "proxying /api/*" line, treat this as unknown instead.' -f $upstreamOrigin)
+    }
+    if ($proxyExit -eq 2) {
+      throw ('remote proxy configuration REFUSED (exit 2): proxy-web9999.ps1 stopped before changing anything, so the rule was NOT added and /api/* is still not proxied. Its REFUSED line names the missing piece - an https origin, URL Rewrite, ARR, the IIS site, or an upstream that does not answer. Fix that and run it again on the server.')
+    }
+    throw ('remote proxy configuration failed (exit {0}): proxy-web9999.ps1 exited with a code it does not document, so what the server now has is unknown. Run it there and read its output; do not assume /api/* is proxied.' -f $proxyExit)
   }
 } else {
   Write-Host '  the rails proxy was NOT configured: no -Upstream was given'
