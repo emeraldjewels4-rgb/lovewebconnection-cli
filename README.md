@@ -62,6 +62,23 @@ Set `CHROME_PATH` to a Chrome, Edge or Chromium binary to run it, or
 `LWC_SKIP_BROWSER=1 npm test` to skip only that file. See [CI and the browser
 test](#ci-and-the-browser-test) for what the workflow does with it.
 
+## Live page/API check
+
+`npm run live-check` is a read-only check for the deployed web9999 page and
+API. It hashes `web9999/index.html` against the live page, verifies the API
+status and coin contract against the tracked PHP source, and exits `1` on a
+mismatch or health failure. It never uploads, restores, or deploys anything.
+
+```bash
+npm run live-check
+npm run live-check:json
+```
+
+Set `LWC_LIVE_ALERT_WEBHOOK` (and optionally `LWC_WEBHOOK_AUTH`) to POST failures
+to a webhook. To compare the exact live API source files too, fill
+`CPANEL_USER` plus `CPANEL_PASS` or `CPANEL_TOKEN` in `.env.cpanel`; the check
+only calls the read-only Fileman `get_file_content` action.
+
 ## Deploying the page
 
 `deploy/deploy-web9999.ps1` builds the bundle, copies it to the Windows VPS over
