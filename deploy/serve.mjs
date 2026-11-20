@@ -25,37 +25,11 @@ import { createServer } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const BINDS = ['127.0.0.1', '0.0.0.0'];
 const UPSTREAM_TIMEOUT_MS = 20_000;
 
-const argv = process.argv.slice(2);
-const positional = [];
-let bind = '127.0.0.1';
-let upstreamArg = '';
-for (let i = 0; i < argv.length; i++) {
-  const arg = argv[i];
-  if (arg === '-Bind' || arg === '--bind') {
-    bind = argv[++i];
-    continue;
-  }
-  if (arg === '-Upstream' || arg === '--upstream') {
-    upstreamArg = argv[++i] ?? '';
-    continue;
-  }
-  // Anything else that starts with a dash is a typo, and passing it on made the failure arrive as
-  // "port -Upsteam is not a port number" instead of naming the option that was misspelled.
-  if (arg.startsWith('-')) {
-    console.error(`  unknown option ${arg}. Use -Bind, -Upstream, or <folder> <port>.`);
-    process.exit(2);
-  }
-  positional.push(arg);
-}
-
-if (!BINDS.includes(bind)) {
-  console.error(`  -Bind ${bind ?? ''} is not an address. Use ${BINDS.join(' or ')}.`);
-  process.exit(2);
-}
 
 // The same rules proxy-web9999.ps1 applies, so the two servers accept and refuse the same input:
 // https only, an origin with an optional base path, no query or fragment, and no dot segments.
@@ -138,7 +112,7 @@ function proxyToUpstream(req, res, upstream) {
 // origin that serves the site itself - comes back 200 with HTML, and a proxy that looks only at the
 // status reports the rails as configured while the page fails to parse what it got. The same test,
 // in the same words, as Test-ApiAnswer in proxy-web9999.ps1, so the two servers agree on "working".
-function classifyCoinsAnswer(contentType, body) {
+export function classifyCoinsAnswer(contentType, body) {
   const type = String(contentType ?? '').split(';')[0].trim().toLowerCase();
   const text = String(body ?? '').trimStart();
   const kind =
@@ -199,63 +173,115 @@ function checkUpstreamCoins(upstream) {
   probe.end();
 }
 
-const root = positional[0] ?? '.';
-const port = Number(positional[1] ?? 8782);
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  console.error(`  port ${positional[1]} is not a port number`);
-  process.exit(2);
-}
-
-let upstream = null;
-try {
-  upstream = parseUpstream(upstreamArg);
-} catch (error) {
-  console.error(`  REFUSED: ${error.message}`);
-  console.error('  nothing was started. Fix the origin, or leave -Upstream off to serve the page alone.');
-  process.exit(2);
-}
-
-const types = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-};
-
-createServer(async (request, response) => {
-  const path = decodeURIComponent((request.url ?? '/').split('?')[0]);
-
-  if (upstream && path.startsWith('/api/')) {
-    proxyToUpstream(request, response, upstream);
-    return;
+// The same file is both a server and the unit its test imports. Everything above is behaviour;
+// this is the part that only makes sense when the file is run, so an import starts no listener and
+// reads no process argv it did not write.
+function main() {
+  const argv = process.argv.slice(2);
+  const positional = [];
+  let bind = '127.0.0.1';
+  let upstreamArg = '';
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '-Bind' || arg === '--bind') {
+      bind = argv[++i];
+      continue;
+    }
+    if (arg === '-Upstream' || arg === '--upstream') {
+      upstreamArg = argv[++i] ?? '';
+      continue;
+    }
+    // Anything else that starts with a dash is a typo, and passing it on made the failure arrive as
+    // "port -Upsteam is not a port number" instead of naming the option that was misspelled.
+    if (arg.startsWith('-')) {
+      console.error(`  unknown option ${arg}. Use -Bind, -Upstream, or <folder> <port>.`);
+      process.exit(2);
+    }
+    positional.push(arg);
   }
 
-  const relative = path === '/' ? 'index.html' : normalize(path.replace(/^\/+/, ''));
-  if (relative.startsWith('..')) {
-    response.writeHead(403).end('forbidden');
-    return;
+  if (!BINDS.includes(bind)) {
+    console.error(`  -Bind ${bind ?? ''} is not an address. Use ${BINDS.join(' or ')}.`);
+    process.exit(2);
   }
+
+  const root = positional[0] ?? '.';
+  const port = Number(positional[1] ?? 8782);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error(`  port ${positional[1]} is not a port number`);
+    process.exit(2);
+  }
+
+  let upstream = null;
   try {
-    const body = await readFile(join(root, relative));
-    response.writeHead(200, { 'content-type': types[extname(relative)] ?? 'application/octet-stream' });
-    response.end(body);
-  } catch {
-    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    response.end('not found');
+    upstream = parseUpstream(upstreamArg);
+  } catch (error) {
+    console.error(`  REFUSED: ${error.message}`);
+    console.error('  nothing was started. Fix the origin, or leave -Upstream off to serve the page alone.');
+    process.exit(2);
   }
-}).listen(port, bind, () => {
-  const where = bind === '0.0.0.0' ? 'every interface, reachable from outside' : 'loopback only, not reachable from outside';
-  console.log(`web9999 serving ${root} on http://${bind}:${port}/ (${where})`);
-  console.log(
-    upstream
-      ? `  rails: /api/* is proxied to ${upstream.text}`
-      : '  rails: /api/* is not proxied - it answers 404 here and the page shows those cells as degraded. Pass -Upstream https://<x10 host> to forward them.'
-  );
-  if (bind === '127.0.0.1') {
-    console.log(`  reach it through a tunnel: ssh -N -L ${port}:127.0.0.1:${port} <user>@<server>`);
-  }
-  if (upstream) checkUpstreamCoins(upstream);
-});
+
+  const types = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.ico': 'image/x-icon',
+  };
+
+  const server = createServer(async (request, response) => {
+    const path = decodeURIComponent((request.url ?? '/').split('?')[0]);
+
+    if (upstream && path.startsWith('/api/')) {
+      proxyToUpstream(request, response, upstream);
+      return;
+    }
+
+    const relative = path === '/' ? 'index.html' : normalize(path.replace(/^\/+/, ''));
+    if (relative.startsWith('..')) {
+      response.writeHead(403).end('forbidden');
+      return;
+    }
+    try {
+      const body = await readFile(join(root, relative));
+      response.writeHead(200, { 'content-type': types[extname(relative)] ?? 'application/octet-stream' });
+      response.end(body);
+    } catch {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('not found');
+    }
+  });
+
+  // A port that is already taken is the likeliest way this server fails to start, and Node's default is
+  // a stack trace whose one useful fact - the port - is buried in EADDRINUSE. It is said in a sentence
+  // instead, and with exit 2: the code this file already uses for every reason it refuses to start, so
+  // a caller sees one contract rather than a second, incidental one.
+  server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`  port ${port} is already in use - another process is listening on ${bind}:${port}; stop it or pass a different port`);
+      process.exit(2);
+    }
+    console.error(`  cannot listen on ${bind}:${port}: ${error.message}`);
+    process.exit(2);
+  });
+
+  server.listen(port, bind, () => {
+    const where = bind === '0.0.0.0' ? 'every interface, reachable from outside' : 'loopback only, not reachable from outside';
+    console.log(`web9999 serving ${root} on http://${bind}:${port}/ (${where})`);
+    console.log(
+      upstream
+        ? `  rails: /api/* is proxied to ${upstream.text}`
+        : '  rails: /api/* is not proxied - it answers 404 here and the page shows those cells as degraded. Pass -Upstream https://<x10 host> to forward them.'
+    );
+    if (bind === '127.0.0.1') {
+      console.log(`  reach it through a tunnel: ssh -N -L ${port}:127.0.0.1:${port} <user>@<server>`);
+    }
+    if (upstream) checkUpstreamCoins(upstream);
+  });
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}
