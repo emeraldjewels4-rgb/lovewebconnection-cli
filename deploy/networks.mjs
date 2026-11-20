@@ -10,9 +10,12 @@
 //
 // WHERE IT COMES FROM
 //
-// CHAIN_PRESETS in src/chain.ts, read through the built dist/chain.js so the file always
-// describes the presets this build of the kit ships. Nothing here is hand-maintained: edit the
-// presets, rebuild, regenerate.
+// CHAIN_PRESETS in src/chain.ts, imported directly. Node 24 strips the type annotations on import
+// (this repo requires >= 24), so the presets are read where they are written: no build sits between
+// the source and this file, and --check therefore needs no dist/ - a fresh clone with no build can
+// still prove networks.json against the source. A tree packaged without src/ (a dist-only drop)
+// falls back to dist/chain.js, which exports the same table. Nothing here is hand-maintained: edit
+// the presets, regenerate.
 //
 //   node deploy/networks.mjs           write web9999/networks.json
 //   node deploy/networks.mjs --check   exit 1 if the file on disk disagrees with the presets
@@ -21,37 +24,49 @@
 //
 // Everything is written to stdout: deploy-web9999.ps1 runs this with
 // $ErrorActionPreference = 'Stop', where a native command's stderr becomes a terminating error.
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
-const builtPath = path.join(root, 'dist', 'chain.js');
 const sourcePath = path.join(root, 'src', 'chain.ts');
+const builtPath = path.join(root, 'dist', 'chain.js');
 const outPath = path.join(root, 'web9999', 'networks.json');
 const check = process.argv.includes('--check');
 
-if (!existsSync(builtPath)) {
-  console.log(`  no build at ${path.relative(root, builtPath)}: run npm run build first`);
-  process.exit(2);
-}
-if (existsSync(sourcePath) && statSync(sourcePath).mtimeMs > statSync(builtPath).mtimeMs) {
-  // --check exists to prove the committed file matches the presets, and it reads them from the
-  // build. A build older than the source makes that proof hollow: the file can match a stale
-  // dist and still disagree with src/chain.ts, which is the drift the hook is there to stop. So
-  // the check refuses instead, and says the two commands that fix it in order.
-  if (check) {
-    console.log('  dist/chain.js is older than src/chain.ts, so this check would compare against stale presets: run npm run build, then node deploy/networks.mjs');
+// The source first, the build only as a fallback. No timestamps are consulted anywhere: a checkout,
+// a restore or a clock that ran backwards all change file times without changing a preset, and any of
+// them used to decide this check for reasons that had nothing to do with the file being right.
+let table;
+let readFrom = null;
+for (const candidate of [{ file: sourcePath, label: 'src/chain.ts' }, { file: builtPath, label: 'dist/chain.js' }]) {
+  if (!existsSync(candidate.file)) continue;
+  try {
+    table = (await import(pathToFileURL(candidate.file).href)).CHAIN_PRESETS;
+  } catch (error) {
+    const reason = String(error.message).split('\n')[0];
+    console.log(`  cannot read CHAIN_PRESETS from ${candidate.label}: ${reason}`);
+    console.log('  reading src/chain.ts directly needs the dependencies installed (npm install) and Node >= 24 for type stripping');
     process.exit(2);
   }
-  console.log('  note: src/chain.ts is newer than dist/chain.js, so these presets may lag the source; npm run build refreshes them');
+  if (table) {
+    readFrom = candidate.label;
+    break;
+  }
 }
 
-const { CHAIN_PRESETS } = await import(pathToFileURL(builtPath).href);
-const presets = Object.values(CHAIN_PRESETS ?? {});
+if (!readFrom) {
+  console.log('  no CHAIN_PRESETS in src/chain.ts and no build at dist/chain.js: nothing to read');
+  process.exit(2);
+}
+if (readFrom !== 'src/chain.ts') {
+  console.log(`  note: no src/chain.ts here, so the presets came from ${readFrom}`);
+}
+
+const presets = Object.values(table);
 if (presets.length === 0) {
-  console.log('  no presets in dist/chain.js: nothing to write');
+  console.log(`  no presets in ${readFrom}: nothing to write`);
   process.exit(2);
 }
 

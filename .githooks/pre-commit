@@ -15,17 +15,62 @@ cd "$(git rev-parse --show-toplevel)"
 # its chain table: a copy that lags the presets ships the wrong table to every visitor, and no test
 # would notice because the tests read the presets, not the file. Cheap enough to run first.
 echo "pre-commit: networks.json against the presets"
+# The checker reads CHAIN_PRESETS from src/chain.ts itself - Node strips the types on import, which this
+# repo already requires - so it needs no build: a fresh clone with no dist/ is checked exactly like any
+# other tree, and there is nothing to skip for. No timestamps are involved either: a checkout, a restore
+# or an idle touch changes file times without changing a preset, and used to decide this gate.
+# exit 1 is the file disagreeing with the presets. exit 2 is a check that could not read them at all
+# (no source, or the dependencies it imports are not installed): a refusal, because nothing proved the
+# file right - not a pass. The hook prints the same ' REFUSED: ' line the deploy scripts do, so a
+# blocked commit reads the same across the repositories.
 if node deploy/networks.mjs --check; then
   :
 else
   status=$?
   echo ""
-  echo "pre-commit: REFUSED - web9999/networks.json does not match CHAIN_PRESETS (exit $status); the commit was not created."
-  echo "            node deploy/networks.mjs    then stage web9999/networks.json and commit again"
-  if [ "$status" -eq 2 ]; then
-    echo "            exit 2 means the build is missing or older than src/chain.ts: npm run build first"
+  case "$status" in
+    1)
+      echo "  REFUSED: web9999/networks.json does not match CHAIN_PRESETS; the commit was not created."
+      echo "            node deploy/networks.mjs    then stage web9999/networks.json and commit again"
+      ;;
+    2)
+      echo "  REFUSED: the presets could not be read from src/chain.ts, so networks.json was not checked; the commit was not created."
+      echo "            npm install    then commit again"
+      ;;
+    *)
+      echo "  REFUSED: the networks.json check could not run (node exited $status); the commit was not created."
+      ;;
+  esac
+  exit 2
+fi
+
+# deploy/*.ps1 are exercised by nothing: the typecheck and the test suite are TypeScript, so a broken
+# probe in proxy-web9999.ps1 reaches a commit untouched and only fails on the server, where the site is
+# already being changed. -SelfTest is pure (no IIS, no network) and takes about a second, so any commit
+# that stages one of those scripts runs it first. It exits 1 on a failed check, which becomes this
+# hook's 2: the deploy scripts' own code for a refusal.
+echo "pre-commit: deploy scripts against their selftest"
+staged_deploy=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^deploy/.*\.ps1$' || true)
+if [ -z "$staged_deploy" ]; then
+  echo "  no deploy/*.ps1 staged; skipped"
+else
+  if command -v pwsh >/dev/null 2>&1; then
+    ps=pwsh
+  elif command -v powershell >/dev/null 2>&1; then
+    ps=powershell
+  else
+    echo "  REFUSED: no PowerShell on PATH, so deploy/proxy-web9999.ps1 -SelfTest cannot run; the commit was not created."
+    exit 2
   fi
-  exit 1
+  echo "  staged:$(printf '%s' "$staged_deploy" | tr '\n' ' ' | sed 's/^/ /')"
+  if ! selftest=$("$ps" -NoProfile -ExecutionPolicy Bypass -File deploy/proxy-web9999.ps1 -SelfTest 2>&1); then
+    printf '%s\n' "$selftest" | grep -E 'FAIL|selftest' | sed 's/^/        /'
+    echo ""
+    echo "  REFUSED: deploy/proxy-web9999.ps1 -SelfTest failed, so the proxy checks are not what they claim; the commit was not created."
+    echo "            $ps -NoProfile -File deploy/proxy-web9999.ps1 -SelfTest    to see every check"
+    exit 2
+  fi
+  printf '%s\n' "$selftest" | tail -1 | sed 's/^/        /'
 fi
 
 echo "pre-commit: typecheck"
