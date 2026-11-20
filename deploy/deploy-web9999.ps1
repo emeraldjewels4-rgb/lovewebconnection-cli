@@ -208,7 +208,12 @@ try {
   # /web9999/networks.json - and not in the proxy rule, which forwards /api/* only. Generating it
   # here, instead of trusting a committed copy, means the bundle cannot ship a table that
   # disagrees with the presets this build came from.
-  & node (Join-Path $PSScriptRoot 'networks.mjs')
+  # Named before it is run: without it node writes "Cannot find module" to stderr, which under
+  # $ErrorActionPreference = 'Stop' surfaces as a terminating error that buries the one fact worth
+  # knowing - the file the deploy needs is not in this checkout.
+  $generator = Join-Path $PSScriptRoot 'networks.mjs'
+  if (-not (Test-Path $generator)) { throw ('no networks.mjs next to this script: it generates web9999/networks.json, which the page fetches at /web9999/networks.json') }
+  & node $generator
   if ($LASTEXITCODE -ne 0) { throw ('generating networks.json failed (exit {0}) - run npm run build, then retry' -f $LASTEXITCODE) }
   Copy-Item (Join-Path $siteDir 'index.html') $stage
   # The page asks for /web9999/networks.json absolutely and the site is bound at the root

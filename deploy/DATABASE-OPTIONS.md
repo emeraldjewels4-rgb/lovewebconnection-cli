@@ -20,6 +20,7 @@ Written from the code that exists, not from a generic template. Nothing has been
   2. otherwise `WEB9999_DB_DSN`, `WEB9999_DB_USER`, `WEB9999_DB_PASSWORD`.
 - **The DSN is `mysql:host=…;port=…;dbname=…;charset=utf8mb4`** with no TLS parameters, and **each PHP request opens its own connection** (plain PDO constructor, no persistent handle, no pool).
 - The page calls `/api/web9999/coins`, `/api/markets`, `/api/monero/stats.php` and `/web9999/networks.json` **same-origin and absolute**, which is why the rails must run wherever the page is served.
+- `/web9999/networks.json` is **static and ships in the deploy bundle** (generated from `CHAIN_PRESETS` by `deploy/networks.mjs`, staged under `web9999/` so the absolute path resolves), so IIS serves it and the proxy rule never sees it; a rule for it would fetch a file x10 does not have.
 
 ## Option A — MySQL on the VPS, next to the app
 
