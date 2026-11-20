@@ -103,8 +103,16 @@ builds the bundle and prints the commands, marking `rails: NOT proxied` where a
 real deploy would refuse.
 
 The bundle is `index.html`, `networks.json` beside it (generated from the chain
-presets on every build, and fetched relatively by the page), `api/`, and
-`serve.mjs`.
+presets on every build, and fetched relatively by the page, so that one copy
+serves a deploy at the domain root and under a subdirectory alike), `api/`, and
+`serve.mjs`. There is no second copy under `web9999/`: the page never asks for
+the absolute path.
+
+One tab still running the **old cached page** keeps asking for
+`/web9999/networks.json`, the absolute path that copy lived at. That file is gone,
+so that tab shows one error row in its chain table until it reloads; the reload
+downloads the current page, which asks for `networks.json` beside itself and finds
+it. Nothing needs fixing on the server for this, and the row disappears on its own.
 
 `-Bind` chooses how the site is reachable: `127.0.0.1` for a tunnel, `0.0.0.0`
 for the public URL, omitted to keep whatever the site already has. Changing an
