@@ -115,6 +115,29 @@ function Get-ForwardedPaths {
 #   a bare host:port target, which is an http target; the scheme is what makes ARR open the
 #   connection over TLS. Since x10 answers https only, the scheme is not decoration.
 #   stopProcessing keeps a later rule from claiming a request that is already leaving the server.
+# What an answer to /api/web9999/coins actually is. A misrouted base path - the origin pointing one
+# directory too high, or the rule forwarding to something that serves the site itself - comes back
+# as 200 with HTML, and a status-code-only test calls that "configured" while every browser gets the
+# wrong page. The content type is the difference between a JSON read and a page.
+function Test-ApiAnswer($contentType, $content) {
+  $type = if ($contentType) { ([string]$contentType).Split(';')[0].Trim().ToLower() } else { '' }
+  $body = ([string]$content).TrimStart()
+  $kind = if ($body -match '(?i)^(<!doctype html|<html|<head|<body)') { 'HTML' }
+          elseif ($type -match 'html') { 'HTML' }
+          elseif ($type -eq 'application/json' -or $body -match '^[\{\[]') { 'JSON' }
+          else { 'something else' }
+  if ($type -ne 'application/json') {
+    $served = if ($type) { "as $type" } else { 'with no content type' }
+    return @{ Ok = $false; Kind = $kind; Why = ("it answered with $kind, $served, not application/json") }
+  }
+  if ($body -eq '') {
+    return @{ Ok = $false; Kind = $kind; Why = 'the content type says JSON but the body is empty' }
+  }
+  try { $null = $body | ConvertFrom-Json }
+  catch { return @{ Ok = $false; Kind = $kind; Why = 'the content type says JSON but the body does not parse as JSON' } }
+  return @{ Ok = $true; Kind = $kind; Why = '' }
+}
+
 function New-ProxyRule {
   param([string]$Origin, [string]$Name)
   $forward = $Forwards[0]
@@ -187,6 +210,19 @@ if ($SelfTest) {
   Check 'and the plan lands there too' $subPlan[0].GoesTo 'https://fiatgod.x10.mx/web9999-interface/api/{R:1}'
   $rootRule = New-ProxyRule -Origin (Get-ProxyOrigin 'https://account.x10.mx')
   Check 'a root origin still rewrites at the root' $rootRule.action.url 'https://account.x10.mx/api/{R:1}'
+
+  # A 200 is what a working JSON read and a misrouted SPA page have in common, so the content type
+  # is what the two probes decide on. These cases are the ones that used to pass as "configured".
+  Check 'a json answer is accepted' (Test-ApiAnswer 'application/json; charset=utf-8' '{"coins":[]}').Ok 'True'
+  Check 'a json array is accepted' (Test-ApiAnswer 'application/json' '[1,2]').Ok 'True'
+  Check 'an html page at 200 is refused' (Test-ApiAnswer 'text/html; charset=utf-8' '<!DOCTYPE html><html><body>web9999</body></html>').Ok 'False'
+  Check 'and the reason names HTML' ((Test-ApiAnswer 'text/html' '<!doctype html><p>x</p>').Why -like '*HTML*') 'True'
+  Check 'html with no doctype is still refused' (Test-ApiAnswer 'text/html' '<div id="app"></div>').Ok 'False'
+  Check 'html served as octet-stream is refused' (Test-ApiAnswer 'application/octet-stream' '<!doctype html>').Ok 'False'
+  Check 'a page with no content type is refused' (Test-ApiAnswer '' '<html></html>').Ok 'False'
+  Check 'json without the json content type is refused' (Test-ApiAnswer 'text/plain' '{"coins":[]}').Ok 'False'
+  Check 'a json content type with a broken body is refused' (Test-ApiAnswer 'application/json' '{not json').Ok 'False'
+  Check 'a json content type with an empty body is refused' (Test-ApiAnswer 'application/json' '').Ok 'False'
 
   if ($failures -eq 0) { Write-Host '  proxy selftest PASSED'; exit 0 }
   Write-Host ("  proxy selftest FAILED ({0})" -f $failures)
@@ -269,12 +305,20 @@ if ($Remove) {
 Write-Host ('  checking the upstream: {0}/api/web9999/coins' -f $origin)
 try {
   $upstreamProbe = Invoke-WebRequest -Uri ('{0}/api/web9999/coins' -f $origin) -UseBasicParsing -TimeoutSec 20
-  Write-Host ('    HTTP {0}, {1} bytes, {2}' -f $upstreamProbe.StatusCode, $upstreamProbe.RawContentLength, $upstreamProbe.Headers['Content-Type'])
 } catch {
   Write-Host ('  REFUSED: the upstream did not answer: ' + $_.Exception.Message)
   Write-Host '  nothing was changed. Fix the x10 side first, then run this again.'
   exit 2
 }
+$upstreamAnswer = Test-ApiAnswer $upstreamProbe.Headers['Content-Type'] $upstreamProbe.Content
+Write-Host ('    HTTP {0}, {1} bytes, {2}' -f $upstreamProbe.StatusCode, $upstreamProbe.RawContentLength, $upstreamProbe.Headers['Content-Type'])
+if (-not $upstreamAnswer.Ok) {
+  Write-Host ('  REFUSED: {0}/api/web9999/coins is not the API: {1}' -f $origin, $upstreamAnswer.Why)
+  Write-Host '  a rule pointing here would forward that answer to every browser, so nothing was changed.'
+  Write-Host '  check -Upstream: it must be the directory that holds api/web9999/coins, with no extra path.'
+  exit 2
+}
+Write-Host '    and it is JSON, not a page'
 
 # Server scope, the same place appcmd writes with /commit:apphost. On a managed host this section
 # can be locked, and the raw error for that ("this configuration section cannot be used at this
@@ -308,7 +352,18 @@ try {
   if ($head.Length -gt 100) { $head = $head.Substring(0, 100) + '...' }
   Write-Host ('    HTTP {0}, {1} bytes, {2}' -f $probe.StatusCode, $probe.RawContentLength, $probe.Headers['Content-Type'])
   Write-Host ('    {0}' -f $head)
-  Write-Host '  done'
+  # A 200 is not proof. The site's own page answers 200 too, and a rule that forwards nowhere useful
+  # hands the browser that page instead of the rails - so the answer has to be JSON to count.
+  $answer = Test-ApiAnswer $probe.Headers['Content-Type'] $probe.Content
+  if (-not $answer.Ok) {
+    Write-Host ''
+    Write-Host ('  NOT CONFIGURED: the proxied request did not get JSON back: {0}' -f $answer.Why)
+    Write-Host '  the rule is in place but /api/web9999/coins is not reaching the rails: most often the'
+    Write-Host '  upstream base path is wrong, so the proxy lands on the site page at the origin.'
+    Write-Host ('  compare with the upstream directly: curl {0}/api/web9999/coins' -f $origin)
+    exit 1
+  }
+  Write-Host '  done: /api/web9999/coins answers JSON through the proxy'
   exit 0
 } catch {
   Write-Host ('    the proxied request failed: ' + $_.Exception.Message)
