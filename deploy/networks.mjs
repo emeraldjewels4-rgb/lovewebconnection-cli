@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Writes web9999/networks.json, the chain table the page reads at /web9999/networks.json.
+// Writes web9999/networks.json, the chain table the page fetches as networks.json beside itself.
 //
 // WHERE IT BELONGS
 //
-// In the bundle, at /web9999/networks.json - not in the proxy rule. The page asks for it same-origin,
+// In the bundle, beside index.html - not in the proxy rule. The page asks for it same-origin,
 // and it is a file this repository generates, so the deploy already puts it on the server. A
 // proxy rule for /web9999/* would ask x10 for a file x10 never had, and would make the site
 // depend on a second host for its own chain list. The proxy forwards /api/* only.

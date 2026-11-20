@@ -381,7 +381,7 @@
         const body = $('chains').querySelector('tbody');
         let networks;
         try {
-          const response = await fetch('/web9999/networks.json', { headers: { Accept: 'application/json' } });
+          const response = await fetch('networks.json', { headers: { Accept: 'application/json' } });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           networks = (await response.json()).networks;
           if (!Array.isArray(networks)) throw new Error('networks.json has no networks');
@@ -391,7 +391,7 @@
           const td = document.createElement('td');
           td.colSpan = 5;
           td.className = 'no';
-          td.textContent = `networks.json is missing from this build (${error.message}) — rebuild with build.mjs`;
+          td.textContent = `networks.json is missing from this build (${error.message}) — it ships beside this page; rebuild with deploy/networks.mjs`;
           tr.appendChild(td);
           body.appendChild(tr);
           $('chain-summary').textContent = '';

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs before every commit: typecheck first, then the test suite.
+# Runs before every commit: the networks table, then typecheck, then the test suite.
 #
 # Installed by `npm install` via the "prepare" script, which points
 # core.hooksPath at this directory. To set it up by hand:
@@ -10,6 +10,23 @@
 set -e
 
 cd "$(git rev-parse --show-toplevel)"
+
+# web9999/networks.json is generated from CHAIN_PRESETS in src/chain.ts, and the page fetches it as
+# its chain table: a copy that lags the presets ships the wrong table to every visitor, and no test
+# would notice because the tests read the presets, not the file. Cheap enough to run first.
+echo "pre-commit: networks.json against the presets"
+if node deploy/networks.mjs --check; then
+  :
+else
+  status=$?
+  echo ""
+  echo "pre-commit: REFUSED - web9999/networks.json does not match CHAIN_PRESETS (exit $status); the commit was not created."
+  echo "            node deploy/networks.mjs    then stage web9999/networks.json and commit again"
+  if [ "$status" -eq 2 ]; then
+    echo "            exit 2 means no usable build: npm run build first"
+  fi
+  exit 1
+fi
 
 echo "pre-commit: typecheck"
 npm run typecheck
