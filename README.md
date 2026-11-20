@@ -82,10 +82,11 @@ only calls the read-only Fileman `get_file_content` action.
 ## Deploying the page
 
 `deploy/deploy-web9999.ps1` builds the bundle, copies it to the Windows VPS over
-SSH, installs it under IIS, and - on every deploy that is given an origin -
-configures the `/api/*` proxy that stands in for the rails this site cannot serve
-itself. A dry run builds the bundle and prints the commands without uploading or
-changing anything.
+SSH, installs it under IIS, and configures the `/api/*` proxy that stands in for
+the rails this site cannot serve itself. `-Upstream` is required: a deploy without
+it would ship a page whose every `/api/*` read answers 404, so it refuses instead.
+A dry run builds the bundle and prints the commands without uploading, changing
+anything, or needing an origin.
 
 ```powershell
 .\deploy\deploy-web9999.ps1 -Upstream https://fiatgod.x10.mx -DryRun
@@ -94,10 +95,12 @@ changing anything.
 
 `-Upstream` is the x10 origin the rails are proxied to. It accepts a subdirectory
 (`https://fiatgod.x10.mx/web9999-interface`), and that prefix is kept in front of
-`/api/{R:1}` in the rewrite and in the checks that probe it. Leave it out and the
-page still deploys; `/api/*` answers `404` until the proxy is configured, and the
-deploy says so - `rails: NOT proxied` - and prints the one command that fixes it,
-with `proxy-web9999.ps1` already uploaded.
+`/api/{R:1}` in the rewrite and in the checks that probe it. It is required: left
+out, the deploy prints one line - `REFUSED: -Upstream is required` - exits 2, and
+builds nothing, because the page it would have shipped answers 404 to every
+`/api/*` read behind it. `-DryRun` is the exception: without an origin it still
+builds the bundle and prints the commands, marking `rails: NOT proxied` where a
+real deploy would refuse.
 
 The bundle is `index.html`, `networks.json` beside it (generated from the chain
 presets on every build, and fetched relatively by the page), `api/`, and
