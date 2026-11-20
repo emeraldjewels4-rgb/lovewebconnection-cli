@@ -5,6 +5,7 @@
 //   node serve.mjs <folder> <port> -Bind 0.0.0.0                # every interface, for a public host
 //   node serve.mjs <folder> <port> -Upstream https://account.x10.mx
 //   node serve.mjs <folder> <port> -Upstream https://domain/web9999-interface
+//   node serve.mjs -Upstream https://account.x10.mx -Probe        # ask the origin for coins, then exit
 //
 // -Bind takes the two values install-web9999.ps1 takes and defaults to the same one: exposure is
 // a decision, not a side effect of starting a fallback server. Anything else is refused rather
@@ -134,43 +135,62 @@ export function classifyCoinsAnswer(contentType, body) {
   return { ok: true, kind, why: '' };
 }
 
-// Said once, at startup, because the alternative is finding out from a page that silently renders
-// nothing: this proxy copies whatever the origin answers, so a wrong base path is a 200 the browser
-// cannot parse. Not fatal - the page still loads and its other cells still work - and it adds no
-// exit code, so the contract this server already has is unchanged.
+// Ask the origin what /api/web9999/coins actually is. Its answer describes the world the server is
+// launched into, and the alternative is finding out from a page that silently renders nothing: this
+// proxy copies whatever the origin answers, so a wrong base path is a 200 the browser cannot parse.
+//
+// Used twice. At startup, where it stays a line in the log and changes no exit code. And on demand
+// with -Probe, because an origin can change under a running server - a redeploy on the far side, a
+// DNS switch - and the startup line then describes something that is no longer true. Not a timer:
+// it runs when someone asks it to, and a probe is a question, so it answers with ok/not-ok rather
+// than a stack.
 function checkUpstreamCoins(upstream) {
   const target = `${upstream.text}/api/web9999/coins`;
-  const chunks = [];
-  const probe = httpsRequest(
-    target,
-    { method: 'GET', timeout: UPSTREAM_TIMEOUT_MS, headers: { accept: 'application/json' } },
-    (answer) => {
-      answer.on('data', (chunk) => {
-        if (chunks.length < 64) chunks.push(chunk);
-      });
-      answer.on('end', () => {
-        const status = answer.statusCode ?? 0;
-        const verdict = classifyCoinsAnswer(answer.headers['content-type'], Buffer.concat(chunks).toString('utf8'));
-        if (status < 200 || status >= 300) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve({ target, ...result });
+    };
+    const chunks = [];
+    const probe = httpsRequest(
+      target,
+      { method: 'GET', timeout: UPSTREAM_TIMEOUT_MS, headers: { accept: 'application/json' } },
+      (answer) => {
+        answer.on('data', (chunk) => {
+          if (chunks.length < 64) chunks.push(chunk);
+        });
+        answer.on('end', () => {
+          const status = answer.statusCode ?? 0;
+          const verdict = classifyCoinsAnswer(answer.headers['content-type'], Buffer.concat(chunks).toString('utf8'));
+          if (status < 200 || status >= 300) {
+            console.log(
+              `  rails check: ${target} answered HTTP ${status}; the rails are not there - check -Upstream, and that api/web9999/coins exists at the origin`
+            );
+            finish({ ok: false, status, verdict });
+            return;
+          }
+          if (verdict.ok) {
+            console.log(`  rails check: ${target} answers JSON`);
+            finish({ ok: true, status, verdict });
+            return;
+          }
+          console.log(`  rails check: MISROUTED BASE PATH - ${target} ${verdict.why}`);
           console.log(
-            `  rails check: ${target} answered HTTP ${status}; the rails are not there - check -Upstream, and that api/web9999/coins exists at the origin`
+            '               the page cannot parse that, so its coin table reads as unavailable; -Upstream must be the directory that holds api/web9999/coins'
           );
-          return;
-        }
-        if (verdict.ok) {
-          console.log(`  rails check: ${target} answers JSON`);
-          return;
-        }
-        console.log(`  rails check: MISROUTED BASE PATH - ${target} ${verdict.why}`);
-        console.log(
-          '               the page cannot parse that, so its coin table reads as unavailable; -Upstream must be the directory that holds api/web9999/coins'
-        );
-      });
-    }
-  );
-  probe.on('timeout', () => probe.destroy(new Error(`no answer within ${UPSTREAM_TIMEOUT_MS / 1000}s`)));
-  probe.on('error', (error) => console.log(`  rails check: could not reach ${target}: ${error.message}`));
-  probe.end();
+          finish({ ok: false, status, verdict });
+        });
+      }
+    );
+    probe.on('timeout', () => probe.destroy(new Error(`no answer within ${UPSTREAM_TIMEOUT_MS / 1000}s`)));
+    probe.on('error', (error) => {
+      console.log(`  rails check: could not reach ${target}: ${error.message}`);
+      finish({ ok: false, status: null, verdict: null, error: error.message });
+    });
+    probe.end();
+  });
 }
 
 // The same file is both a server and the unit its test imports. Everything above is behaviour;
@@ -181,14 +201,19 @@ function main() {
   const positional = [];
   let bind = '127.0.0.1';
   let upstreamArg = '';
+  let probeOnly = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '-Bind' || arg === '--bind') {
+    if (arg === '-Bind') {
       bind = argv[++i];
       continue;
     }
-    if (arg === '-Upstream' || arg === '--upstream') {
+    if (arg === '-Upstream') {
       upstreamArg = argv[++i] ?? '';
+      continue;
+    }
+    if (arg === '-Probe' || arg === '--probe') {
+      probeOnly = true;
       continue;
     }
     // Anything else that starts with a dash is a typo, and passing it on made the failure arrive as
@@ -219,6 +244,20 @@ function main() {
     console.error(`  REFUSED: ${error.message}`);
     console.error('  nothing was started. Fix the origin, or leave -Upstream off to serve the page alone.');
     process.exit(2);
+  }
+
+  // -Probe asks the question and exits: no listener, no page, no timer. Exit 0 means the origin
+  // answered JSON, 2 means it did not - the code this file already returns when it refuses to start,
+  // so a script sees one contract either way.
+  if (probeOnly) {
+    if (!upstream) {
+      console.error('  REFUSED: -Probe needs -Upstream - it asks that origin for /api/web9999/coins');
+      process.exit(2);
+    }
+    checkUpstreamCoins(upstream).then((result) => {
+      process.exitCode = result.ok ? 0 : 2;
+    });
+    return;
   }
 
   const types = {
