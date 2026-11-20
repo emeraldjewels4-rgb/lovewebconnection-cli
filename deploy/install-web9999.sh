@@ -31,6 +31,7 @@ NOCLOBBER=0
 ALLOW_REBIND=0
 DRYRUN=0
 SELFTEST=0
+PRINTCONF=0
 CONF_DIR=/etc/nginx/conf.d
 ZIP=""
 PROG=$(basename "$0")
@@ -53,6 +54,8 @@ usage: install-web9999.sh [options]
   --allow-rebind             permit a run that changes the site's exposure
   --dry-run                  print what would change, change nothing
   --selftest                 prove the planner and the gate on this host, touch nothing
+    --print-conf               print the server block it would write to stdout, then exit
+                               (no root, no writes) - check it with nginx -t
 EOF
 }
 
@@ -67,6 +70,7 @@ while [ $# -gt 0 ]; do
     --allow-rebind) ALLOW_REBIND=1; shift ;;
     --dry-run) DRYRUN=1; shift ;;
     --selftest) SELFTEST=1; shift ;;
+      --print-conf) PRINTCONF=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) refuse "unknown option '$1'; run --help" ;;
   esac
@@ -147,29 +151,32 @@ firewall_public_apply() {
   fi
 }
 
-write_conf() {
-  mkdir -p "$CONF_DIR" || refuse "cannot create $CONF_DIR"
+render_conf() {
+  # The block as it would be written, on stdout. --print-conf prints this and write_conf redirects it
+  # at the file, so there is one description of the block and nothing to drift.
   local proxy_include="# proxy: absent"
   [ -f "/etc/nginx/snippets/web9999-api-proxy.conf" ] && proxy_include="include /etc/nginx/snippets/web9999-api-proxy.conf;"
-  {
-    echo "# managed by deploy/install-web9999.sh - edits are overwritten on the next install"
-    echo "server {"
-    echo "    listen $nginx_listen;"
-    echo "    server_name _;"
-    echo "    root $ROOT;"
-    echo "    index index.html;"
-    echo "    server_tokens off;"
-    echo ""
-    echo "    location / { try_files \$uri \$uri/ =404; }"
-    echo ""
-    echo "    # generated, and fetched relatively by the page: a cached copy is a stale chain table"
-    echo "    location = /networks.json         { add_header Cache-Control \"no-cache\"; }"
-    echo "    location = /web9999/networks.json { add_header Cache-Control \"no-cache\"; }"
-    echo ""
-    echo "    # /api/* is forwarded by proxy-web9999.sh; this line is its only attachment point"
-    echo "    $proxy_include"
-    echo "}"
-  } > "$CONF.tmp" || refuse "cannot write $CONF"
+  echo "# managed by deploy/install-web9999.sh - edits are overwritten on the next install"
+  echo "server {"
+  echo "    listen $nginx_listen;"
+  echo "    server_name _;"
+  echo "    root $ROOT;"
+  echo "    index index.html;"
+  echo "    server_tokens off;"
+  echo ""
+  echo "    location / { try_files \$uri \$uri/ =404; }"
+  echo ""
+  echo "    # generated, and fetched relatively by the page: a cached copy is a stale chain table"
+  echo "    location = /networks.json         { add_header Cache-Control \"no-cache\"; }"
+  echo ""
+  echo "    # /api/* is forwarded by proxy-web9999.sh; this line is its only attachment point"
+  echo "    $proxy_include"
+  echo "}"
+}
+
+write_conf() {
+  mkdir -p "$CONF_DIR" || refuse "cannot create $CONF_DIR"
+  render_conf > "$CONF.tmp" || refuse "cannot write $CONF"
   mv "$CONF.tmp" "$CONF" || refuse "cannot replace $CONF"
 }
 
@@ -218,6 +225,11 @@ selftest() {
   check 'current listen is read from the block' "$(CONF_DIR=$tmp CONF="$tmp/$SITE_NAME.conf" current_listen)" '127.0.0.1:8782'
   rm -rf "$tmp"
 
+    # The rendered block is what lands on the host, so it is asserted here as text: the listen line
+    # the flags asked for, and the one file that must never be cached.
+    check 'the rendered block listens where the flags asked' "$(nginx_listen=0.0.0.0:8782 ROOT=/srv/web9999 render_conf | grep -c '^    listen 0.0.0.0:8782;')" '1'
+    check 'and serves networks.json with no-cache' "$(nginx_listen=127.0.0.1:8782 ROOT=/srv/web9999 render_conf | grep -c 'location = /networks.json.*no-cache')" '1'
+    check 'and keeps exactly one /api/ attachment point' "$(nginx_listen=127.0.0.1:8782 ROOT=/srv/web9999 render_conf | grep -c 'proxy: absent')" '1'
   if [ "$failures" -eq 0 ]; then
     say "  install selftest PASSED ($total checks)"
     exit 0
@@ -230,6 +242,9 @@ if [ "$SELFTEST" = 1 ]; then selftest; fi
 case "$ROOT" in
   ''|/|/etc|/usr|/var|/home) refuse "--root '$ROOT' is not a site directory; point it at a directory the bundle may own" ;;
 esac
+# Rendering is not installing: print the block and leave, before the root check, before the bundle,
+# and before anything is written - this is what makes the file checkable with nginx -t off the host.
+if [ "$PRINTCONF" = 1 ]; then render_conf; exit 0; fi
 if [ "$DRYRUN" = 0 ] && [ "$(id -u)" -ne 0 ]; then refuse "this must run as root to write $CONF_DIR and touch the firewall"; fi
 if [ "$DRYRUN" = 0 ] && ! command -v nginx >/dev/null 2>&1; then refuse "nginx is not installed on this host; install it, or run --dry-run to see the plan"; fi
 [ -f "$ZIP" ] || refuse "bundle not found: $ZIP"

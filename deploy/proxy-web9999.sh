@@ -31,6 +31,8 @@ RULE_NAME=web9999-api-proxy
 REMOVE=0
 DRYRUN=0
 SELFTEST=0
+PRINTCONF=0
+PRINTSITE=0
 CONF_DIR=/etc/nginx/conf.d
 SNIPPET_DIR=/etc/nginx/snippets
 CONF=""
@@ -51,6 +53,8 @@ usage: proxy-web9999.sh [options]
   --remove                         remove the rule and leave /api/* unproxied
   --dry-run                        print the plan, change nothing
   --selftest                       prove the validators and the plan on this host, touch nothing
+  --print-conf                     print the /api/ snippet to stdout, then exit (no root, no writes)
+  --print-site                     print the site block with that snippet included, then exit
 EOF
 }
 
@@ -63,6 +67,8 @@ while [ $# -gt 0 ]; do
     --remove) REMOVE=1; shift ;;
     --dry-run) DRYRUN=1; shift ;;
     --selftest) SELFTEST=1; shift ;;
+    --print-conf) PRINTCONF=1; shift ;;
+    --print-site) PRINTSITE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) refuse "unknown option '$1'; run --help" ;;
   esac
@@ -163,41 +169,72 @@ probe_upstream() {
 # The snippet itself. Referer is not decoration: measured against the live API, it answers
 # "this API answers the pages it is served with" (403) to a caller whose referer names another
 # host, so the header is set to the origin the rails believe they are serving.
-write_snippet() {
+render_snippet() {
   local origin=$1 authority=${1#https://}
   authority=${authority%%/*}
-  mkdir -p "$SNIPPET_DIR" || refuse "cannot create $SNIPPET_DIR"
-  {
     echo "# managed by deploy/proxy-web9999.sh - edits are overwritten on the next run"
     echo "location /api/ {"
     echo "    proxy_pass $origin;"
     echo "    proxy_ssl_server_name on;"
     echo "    proxy_set_header Host $authority;"
-    echo "    proxy_set_header Referer $origin/"
+    echo "    proxy_set_header Referer $origin/;"
     echo "    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;"
     echo "    proxy_set_header X-Forwarded-Proto \$scheme;"
     echo "    proxy_http_version 1.1;"
     echo "    proxy_read_timeout 30s;"
     echo "}"
-  } > "$SNIPPET.tmp" || refuse "cannot write $SNIPPET"
+}
+
+write_snippet() {
+  mkdir -p "$SNIPPET_DIR" || refuse "cannot create $SNIPPET_DIR"
+  render_snippet "$1" > "$SNIPPET.tmp" || refuse "cannot write $SNIPPET"
   mv "$SNIPPET.tmp" "$SNIPPET" || refuse "cannot replace $SNIPPET"
 }
 
 # Attach or detach the include line in the site block, in place, leaving every other line alone.
+# The site block install-web9999.sh writes, for --print-site on a machine with no install yet: the same
+# attachment point, so the include rewrite is exercised on the real shape either way.
+sample_site_conf() {
+  cat <<'SAMPLE'
+# managed by deploy/install-web9999.sh - edits are overwritten on the next install
+server {
+    listen 127.0.0.1:8782;
+    server_name _;
+    root /srv/web9999;
+    index index.html;
+    server_tokens off;
+
+    location / { try_files $uri $uri/ =404; }
+
+    # generated, and fetched relatively by the page: a cached copy is a stale chain table
+    location = /networks.json         { add_header Cache-Control "no-cache"; }
+
+    # /api/* is forwarded by proxy-web9999.sh; this line is its only attachment point
+    # proxy: absent
+}
+SAMPLE
+}
+
+# The include goes in before the last closing brace - that is what lets a reinstall replace the file
+# without dropping it. Split out of set_include so --print-site can run the same awk on a copy.
+attach_include() {
+  awk -v line="    $SNIPPET_IN_SITE" '
+    { sub(/# proxy: absent/, "# proxy: attached"); a[NR] = $0 }
+    END {
+      last = 0
+      for (i = NR; i >= 1; i--) if (a[i] ~ /^[[:space:]]*}/) { last = i; break }
+      for (i = 1; i <= NR; i++) { if (i == last) print line; print a[i] }
+      if (last == 0) print line
+    }' "$1"
+}
+
 set_include() {
   local want=$1 tmp
   [ -f "$CONF" ] || refuse "no nginx server block at $CONF; install the site first (install-web9999.sh)"
   tmp=$(mktemp)
   if [ "$want" = "add" ]; then
     if grep -Fq "$SNIPPET_IN_SITE" "$CONF"; then rm -f "$tmp"; return 0; fi
-    awk -v line="    $SNIPPET_IN_SITE" '
-      { a[NR] = $0 }
-      END {
-        last = 0
-        for (i = NR; i >= 1; i--) if (a[i] ~ /^[[:space:]]*}/) { last = i; break }
-        for (i = 1; i <= NR; i++) { if (i == last) print line; print a[i] }
-        if (last == 0) print line
-      }' "$CONF" > "$tmp"
+    attach_include "$CONF" > "$tmp"
   else
     sed "s|^[[:space:]]*include[[:space:]]*$SNIPPET;.*$|    # proxy: absent|" "$CONF" > "$tmp"
   fi
@@ -258,6 +295,19 @@ selftest() {
   classify_answer 200 '' '{"ok":true}' >/dev/null 2>&1
   check 'json without a content type is refused' "$?" '1'
 
+
+  # nginx -t is the only real proof of the rendered text; on a host without nginx these stand in for it.
+  # The semicolon check is not theoretical: a Referer line without one passed every other check here and
+  # nginx 1.24 rejected it as a proxy_set_header with four arguments.
+  snip=$(render_snippet https://account.x10.mx)
+  check 'the rendered snippet forwards /api/ to the origin' "$(printf '%s' "$snip" | grep -c 'proxy_pass https://account.x10.mx;')" '1'
+  check 'and sets Referer with its semicolon' "$(printf '%s' "$snip" | grep -c 'proxy_set_header Referer https://account.x10.mx/;')" '1'
+  check 'and leaves no directive unterminated' "$(printf '%s\n' "$snip" | grep -cE '^[[:space:]]+[a-z_]+[[:space:]].*[^;{}]$')" '0'
+  samp=$(mktemp); sample_site_conf > "$samp"
+  check 'the include is attached exactly once' "$(attach_include "$samp" | grep -c 'include .*web9999-api-proxy.conf;')" '1'
+  check 'and lands before the closing brace' "$(attach_include "$samp" | tail -1)" '}'
+  check 'the sample carries no include before the rewrite' "$(grep -c '^[[:space:]]*include ' "$samp")" '0'
+  rm -f "$samp"
   if [ "$failures" -eq 0 ]; then
     say "  proxy selftest PASSED ($total checks)"
     exit 0
@@ -290,6 +340,21 @@ fi
 # that exit ends the subshell only. Without this the script would carry on with an empty origin and
 # report some later, wrong refusal.
 origin=$(proxy_origin "$UPSTREAM") || exit 2
+
+# Rendering, before the root check and before any write: --print-conf emits the snippet and
+# --print-site emits the site block with the include attached. Pipe them into files and hand those
+# to nginx -t - the only way to know the awk and the directives are valid without owning the host.
+if [ "$PRINTCONF" = 1 ]; then render_snippet "$origin"; exit 0; fi
+if [ "$PRINTSITE" = 1 ]; then
+  if [ -f "$CONF" ]; then attach_include "$CONF"
+  else
+    tmp=$(mktemp) || refuse "cannot create a temporary file"
+    sample_site_conf > "$tmp"
+    attach_include "$tmp"
+    rm -f "$tmp"
+  fi
+  exit 0
+fi
 
 
 if [ "$DRYRUN" = 1 ]; then
