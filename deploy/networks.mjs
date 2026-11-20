@@ -37,6 +37,14 @@ if (!existsSync(builtPath)) {
   process.exit(2);
 }
 if (existsSync(sourcePath) && statSync(sourcePath).mtimeMs > statSync(builtPath).mtimeMs) {
+  // --check exists to prove the committed file matches the presets, and it reads them from the
+  // build. A build older than the source makes that proof hollow: the file can match a stale
+  // dist and still disagree with src/chain.ts, which is the drift the hook is there to stop. So
+  // the check refuses instead, and says the two commands that fix it in order.
+  if (check) {
+    console.log('  dist/chain.js is older than src/chain.ts, so this check would compare against stale presets: run npm run build, then node deploy/networks.mjs');
+    process.exit(2);
+  }
   console.log('  note: src/chain.ts is newer than dist/chain.js, so these presets may lag the source; npm run build refreshes them');
 }
 

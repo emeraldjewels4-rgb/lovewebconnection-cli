@@ -23,7 +23,7 @@ else
   echo "pre-commit: REFUSED - web9999/networks.json does not match CHAIN_PRESETS (exit $status); the commit was not created."
   echo "            node deploy/networks.mjs    then stage web9999/networks.json and commit again"
   if [ "$status" -eq 2 ]; then
-    echo "            exit 2 means no usable build: npm run build first"
+    echo "            exit 2 means the build is missing or older than src/chain.ts: npm run build first"
   fi
   exit 1
 fi
