@@ -304,13 +304,13 @@
         const body = await response.text().catch(() => '');
         const said = body.trim().slice(0, 80);
         if (!response.ok) {
-          throw new Error(`${label} answered ${response.status}${said ? ` - ${said}` : ''}`);
+          throw new Error(`${label} answered HTTP ${response.status}${said ? ` - ${said}` : ''}`);
         }
         try {
           return JSON.parse(body);
         } catch {
           throw new Error(
-            `${label} answered ${response.status} but not JSON${said ? ` - ${said}` : ''}`,
+            `${label} answered HTTP ${response.status} but not JSON${said ? ` - ${said}` : ''}`,
           );
         }
       }
