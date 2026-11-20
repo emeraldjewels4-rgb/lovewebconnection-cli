@@ -36,13 +36,19 @@
 # Authentication is ordinary OpenSSH: a key (preferred, zero prompts) or the account password
 # typed at the prompt. Nothing is stored here and no credential belongs in this file.
 #
+# The port defaults to 2222, which is where sshd listens on the Windows build this deploys to: a
+# deploy that left the flag out used to reach for 22 and time out against a filtered port. Pass
+# -SshPort 0 to leave the choice to ~/.ssh/config instead - -p and -P are then left out entirely,
+# so a Host block naming Port, User or IdentityFile applies untouched.
+#
 # The server runs Windows Server - its SSH banner is OpenSSH_for_Windows and :80 is IIS 10 -
 # so the install half is PowerShell against IIS, not systemd. IIS is already running and
 # already bound to :80, which is why the site reuses it instead of installing a runtime.
 [CmdletBinding()]
 param(
   [string]$VpsHost = '108.181.154.182',
-  [int]$SshPort = 22,
+  # 2222 is where sshd was moved to; 0 means "pass no port at all and let ssh_config decide".
+  [int]$SshPort = 2222,
   [string]$User = 'administrator',
   [int]$WebPort = 8782,
   # Empty means "adopt the binding the site already has"; see the note above.
@@ -128,8 +134,15 @@ if ($upstreamOrigin) {
 
 # scp takes -P for the port, ssh takes -p: splatting one array into both passes each tool a
 # flag it does not accept, which ssh reports as a usage error rather than a connection error.
-$scpOptions = @('-P', $SshPort, '-o', 'StrictHostKeyChecking=accept-new')
-$sshOptions = @('-p', $SshPort, '-o', 'StrictHostKeyChecking=accept-new')
+$scpOptions = @('-o', 'StrictHostKeyChecking=accept-new')
+$sshOptions = @('-o', 'StrictHostKeyChecking=accept-new')
+if ($SshPort -gt 0) {
+  $scpOptions = @('-P', $SshPort) + $scpOptions
+  $sshOptions = @('-p', $SshPort) + $sshOptions
+}
+
+# How a message names the port: the number that was asked for, or the fact that ssh_config chose.
+$portLabel = $(if ($SshPort -gt 0) { 'port {0}' -f $SshPort } else { 'the port your ssh config picks' })
 if ($KeyFile) {
   $scpOptions += @('-i', $KeyFile)
   $sshOptions += @('-i', $KeyFile)
@@ -161,7 +174,7 @@ function Test-SshLogin {
   $said = (@($answer) | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -First 2) -join ' '
   if ($code -eq 0) { return @{ Outcome = 'ok'; Note = ''; Fix = '' } }
 
-  $who = '{0} on port {1}' -f $remoteUser, $SshPort
+  $who = '{0} on {1}' -f $remoteUser, $portLabel
   $key = $(if ($KeyFile) { 'the key ' + $KeyFile } else { 'the default keys in your .ssh folder' })
   if ($said -match '(?i)host key verification failed') {
     return @{ Outcome = 'refused'; Note = ('the host key for {0} is not the one known_hosts already holds - the server was rebuilt, or something is answering as it' -f $VpsHost);
@@ -179,10 +192,10 @@ function Test-SshLogin {
       Fix = $(if ($KeyFile) { ('that key is not in the account''s authorized_keys on {0}; install it there, or drop -KeyFile to be prompted for the password instead.' -f $VpsHost) } else { 'no default key is authorised on the account; pass -KeyFile with the key that is, or add this machine''s key to the account.' }) }
   }
   if ($said -match '(?i)connection refused') {
-    return @{ Outcome = 'refused'; Note = ('nothing is listening on {0} port {1}' -f $VpsHost, $SshPort); Fix = ('check the port: this deploy used -SshPort {0}.' -f $SshPort) }
+    return @{ Outcome = 'refused'; Note = ('nothing is listening on {0} {1}' -f $VpsHost, $portLabel); Fix = ('check the port: this deploy asked for {0}.' -f $portLabel) }
   }
   if ($said -match '(?i)timed out|no route to host|network is unreachable|connection closed') {
-    return @{ Outcome = 'refused'; Note = ('{0} did not answer within 10s' -f $who); Fix = ('the host or the port is filtered; check -VpsHost and -SshPort {0}.' -f $SshPort) }
+    return @{ Outcome = 'refused'; Note = ('{0} did not answer within 10s' -f $who); Fix = ('the host or the port is filtered; check -VpsHost, and -SshPort if {0} is wrong.' -f $portLabel) }
   }
   return @{ Outcome = 'refused'; Note = ('the login preflight failed (ssh exit {0}) on {1}. ssh said: {2}' -f $code, $who, $said); Fix = 'run the same ssh by hand with -v to see which step fails.' }
 }
@@ -200,7 +213,7 @@ if (-not $DryRun) {
   if ($login.Outcome -eq 'password') {
     Write-Host ('  note      ' + $login.Note)
   } else {
-    Write-Host ('  login     {0} on port {1} accepted' -f $remoteUser, $SshPort)
+    Write-Host ('  login     {0} on {1} accepted' -f $remoteUser, $portLabel)
   }
 }
 
@@ -324,16 +337,39 @@ try {
   if (Test-Path $apiDir) { Copy-Item $apiDir (Join-Path $stage 'api') -Recurse }
   Copy-Item (Join-Path $PSScriptRoot 'serve.mjs') $stage
   if (Test-Path $bundle) { Remove-Item $bundle -Force }
-  Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $bundle -CompressionLevel Optimal
+  # Written entry by entry rather than with Compress-Archive, which joins with the *platform*
+  # separator: on Windows that stamps "api\web9999\coins.php" into the archive, unzip warns about the
+  # backslashes, and a Linux host that extracts it without warning creates one file literally named
+  # that. An entry name is a path inside the archive, not a Windows path, so it is built with forward
+  # slashes here; the sort keeps the byte order stable from build to build.
+  Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+  $stageRoot = (Resolve-Path -LiteralPath $stage).Path
+  $zipStream = [System.IO.File]::Open($bundle, [System.IO.FileMode]::CreateNew)
+  try {
+    $archive = New-Object System.IO.Compression.ZipArchive($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+      Get-ChildItem -LiteralPath $stage -Recurse -File |
+        Sort-Object -Property FullName |
+        ForEach-Object {
+          $entryName = $_.FullName.Substring($stageRoot.Length + 1).Replace('\', '/')
+          [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+            $archive, $_.FullName, $entryName, [System.IO.Compression.CompressionLevel]::Optimal)
+        }
+    } finally { $archive.Dispose() }
+  } finally { $zipStream.Dispose() }
 
   # The page fetches networks.json relative to itself, and a bundle without it deploys a site whose chain
   # table reads "networks.json is missing from this build". Checked on the archive rather than on the
-  # stage, so a change to how the stage is assembled cannot quietly drop it again. Compress-Archive
-  # stores backslashes, so entries are normalised before the comparison.
-  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  # stage, so a change to how the stage is assembled cannot quietly drop it again.
   $archive = [System.IO.Compression.ZipFile]::OpenRead($bundle)
-  try { $entries = @($archive.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }) }
+  try { $entries = @($archive.Entries | ForEach-Object { $_.FullName }) }
   finally { $archive.Dispose() }
+  # A backslash in an entry name is the bug this writer exists to avoid, so it is a refusal and not a
+  # normalisation: silently rewriting it in the check is how the archive stayed wrong for so long.
+  $backslashed = @($entries | Where-Object { $_.Contains('\') })
+  if ($backslashed.Count -gt 0) {
+    throw ('the bundle must name every entry with /, and these do not: {0}' -f ($backslashed -join ', '))
+  }
   if ($entries -notcontains 'networks.json') {
     throw ('the bundle needs networks.json beside index.html, which is where the page fetches it (it has: {0})' -f ($entries -join ', '))
   }
@@ -368,7 +404,7 @@ if ($DryRun) {
 }
 
 Write-Host ('  binding    {0} ({1})' -f $bindMode, $bindNote)
-Write-Host ('  uploading to {0} on SSH {1} - enter the password if no key is configured' -f $remoteUser, $SshPort)
+Write-Host ('  uploading to {0} on SSH {1} - enter the password if no key is configured' -f $remoteUser, $portLabel)
 & scp @scpOptions $bundle ($remoteUser + ':' + $remoteZip)
 if ($LASTEXITCODE -ne 0) { throw ('scp of the bundle failed (exit {0})' -f $LASTEXITCODE) }
 
