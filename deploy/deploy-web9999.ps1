@@ -1,19 +1,21 @@
 # One-command deploy of the web9999 page to the Windows VPS, over SSH - no RDP session.
 #
-#   .\deploy-web9999.ps1                                                    # page only: proxy skipped, command printed
+#   .\deploy-web9999.ps1                                                    # REFUSED: -Upstream is required
 #   .\deploy-web9999.ps1 -Upstream https://account.x10.mx                     # the full deploy, rails proxied
 #   .\deploy-web9999.ps1 -Upstream https://account.x10.mx -Bind 0.0.0.0     # public bind, firewall opened
 #   .\deploy-web9999.ps1 -Upstream https://account.x10.mx -Bind 0.0.0.0 -AllowRebind   # and change it if the site is on the other one
 #   .\deploy-web9999.ps1 -Upstream https://account.x10.mx -DryRun           # build the bundle and print the exact commands
+#   .\deploy-web9999.ps1 -DryRun                                            # the same, before the origin is settled
 #   .\deploy-web9999.ps1 -Upstream https://account.x10.mx -VpsHost 1.2.3.4 -User administrator -WebPort 8782
 #   .\deploy-web9999.ps1 -Upstream https://account.x10.mx -KeyFile C:\Users\you\.ssh\id_ed25519    # no password prompt
 #
-# -Upstream is optional, and is the x10 origin the site's rails are proxied to. Given, the deploy
-# uploads proxy-web9999.ps1, runs it after the install, and fails if that step fails, so the page
-# and its rails cannot drift apart. Omitted, nothing is proxied and /api/* answers 404: the deploy
-# still finishes - there are legitimate deploys of the page alone - but it says so plainly and
-# prints the one command that fixes it, with the origin left as a placeholder. proxy-web9999.ps1
-# is uploaded either way, so that command needs no second scp.
+# -Upstream is required, and is the x10 origin the site's rails are proxied to: the deploy uploads
+# proxy-web9999.ps1, runs it after the install, and fails if that step fails, so the page and its
+# rails cannot drift apart. A run without it is refused before anything is built or uploaded, because
+# the deploy would otherwise succeed while shipping a page whose every /api/* read answers 404 -
+# installed, reachable, and empty. -DryRun is the one exception: it builds the bundle and prints the
+# commands without an origin, so a plan can be inspected before the origin is settled, and it marks
+# where a real deploy would refuse.
 #
 # -Bind picks how the site is reachable. Left out, it means "whatever the site already is": the
 # deploy reads the site's binding from the server and asks for that, so a routine deploy to a
@@ -77,8 +79,8 @@ if (-not (Test-Path $proxy)) { throw "no proxy-web9999.ps1 next to this script: 
 # anything else would rewrite requests to somewhere unintended.
 function Get-UpstreamOrigin {
   param([string]$Text)
-  # Empty is a valid answer: this deploy then leaves /api/* alone and prints the command that
-  # fixes it. Only an origin that was actually given is held to the rules below.
+  # Empty is not refused here: the caller decides, because -DryRun is allowed without an origin and
+  # a real run refuses one. Only an origin that was actually given is held to the rules below.
   if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
   if ($Text -notmatch '^https://') { throw "upstream must be https://, got '$Text' - plain http would put the API data on the wire in the clear" }
   $uri = $null
@@ -107,9 +109,18 @@ $upstreamOrigin = try { Get-UpstreamOrigin $Upstream } catch {
   exit 2
 }
 
-# Built only when an origin was given; an empty string is the difference between "the rails were
-# configured" and "a command is printed for later". -WebPort is passed along so the proxy probes
-# the port this deploy actually bound.
+# A deploy without an origin is not a smaller deploy, it is a broken site: the page installs,
+# answers, and 404s every /api/* read behind it. Refuse it here - before the login preflight and
+# before the bundle is built - rather than finish and print a command for later. -DryRun is exempt
+# because its job is to show what a real run would do; it prints the missing proxy run instead.
+if (-not $upstreamOrigin -and -not $DryRun) {
+  Write-Host '  REFUSED: -Upstream is required - without it the page ships with /api/* answering 404 on the server.'
+  exit 2
+}
+
+# Built when an origin was given. Empty can now only mean -DryRun, where the absence is printed as
+# the difference between "the rails were configured" and "a real deploy would refuse this".
+# -WebPort is passed along so the proxy probes the port this deploy actually bound.
 $proxyCommand = ''
 if ($upstreamOrigin) {
   $proxyCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' + $remoteProxyWindows + ' -Upstream ' + $upstreamOrigin + ' -WebPort ' + $WebPort
@@ -282,8 +293,9 @@ function Show-Access {
   if ($proxyCommand) {
     Write-Host ('  rails: /api/* on the server is proxied to {0}' -f $upstreamOrigin)
   } else {
-    # Said plainly, with the command that ends it: this deploy left the page without rails.
-    Write-Host '  rails: NOT proxied - no -Upstream was given, so /api/* will answer 404 on the server.'
+    # Only reachable under -DryRun now: a real run is refused before this point. Printed rather
+    # than passed over, so the plan shows what a full deploy would add.
+    Write-Host '  rails: NOT proxied - no -Upstream was given, and a real run without one is REFUSED.'
     Write-Host '         proxy-web9999.ps1 is already uploaded; this one command configures it:'
     Write-Host ('    ssh {0} {1} "powershell -NoProfile -ExecutionPolicy Bypass -File {2} -Upstream https://<x10 host> -WebPort {3}"' -f ($sshOptions -join ' '), $remoteUser, $remoteProxyWindows, $WebPort)
   }
@@ -352,7 +364,7 @@ if ($DryRun) {
   if ($proxyCommand) {
     Write-Host ('    ssh {0} {1} {2}' -f ($sshOptions -join ' '), $remoteUser, $proxyCommand)
   } else {
-    Write-Host '    (no proxy run: -Upstream was not given, so /api/* is left answering 404)'
+    Write-Host '    (no proxy run printed: -Upstream was not given, and a real deploy without it is refused)'
   }
   Show-Access
   return
@@ -373,10 +385,9 @@ Write-Host '  installing on the server'
 & ssh @sshOptions $remoteUser $installCommand
 if ($LASTEXITCODE -ne 0) { throw ('remote install failed (exit {0})' -f $LASTEXITCODE) }
 
-# After the install, because the proxy refuses unless the site exists. With an origin this runs on
-# every deploy: a page that loads and then 404s every /api/* read is a broken site that still
-# reports a clean deploy. Without one it is skipped, and said out loud rather than passed over -
-# the deploy is still allowed to finish, but not to look like the rails were configured.
+# After the install, because the proxy refuses unless the site exists. This runs on every real
+# deploy: -Upstream is required above, because a page that loads and then 404s every /api/* read is
+# a broken site that still reports a clean deploy.
 if ($proxyCommand) {
   Write-Host ('  configuring the rails proxy to {0}' -f $upstreamOrigin)
   & ssh @sshOptions $remoteUser $proxyCommand
@@ -394,9 +405,6 @@ if ($proxyCommand) {
     }
     throw ('remote proxy configuration failed (exit {0}): proxy-web9999.ps1 exited with a code it does not document, so what the server now has is unknown. Run it there and read its output; do not assume /api/* is proxied.' -f $proxyExit)
   }
-} else {
-  Write-Host '  the rails proxy was NOT configured: no -Upstream was given'
-  Write-Host '  the page is installed; /api/* answers 404 until the command printed below is run'
 }
 
 Show-Access
