@@ -292,11 +292,34 @@
         }
       }
 
+      /**
+       * Read a JSON answer, reporting what the server actually said when it is not JSON.
+       * A static host answers an unrouted API path with 404 and the body "not found" as
+       * text/plain. Calling response.json() on that throws "Unexpected token 'o',
+       * 'not found' is not valid JSON", which names the parser rather than the API and
+       * hides the one fact worth showing: the API answered 404. So the status is read
+       * first, and a non-JSON body is reported as such instead of as a parse error.
+       */
+      async function readJson(response, label) {
+        const body = await response.text().catch(() => '');
+        const said = body.trim().slice(0, 80);
+        if (!response.ok) {
+          throw new Error(`${label} answered ${response.status}${said ? ` - ${said}` : ''}`);
+        }
+        try {
+          return JSON.parse(body);
+        } catch {
+          throw new Error(
+            `${label} answered ${response.status} but not JSON${said ? ` - ${said}` : ''}`,
+          );
+        }
+      }
+
       async function loadStatus() {
         try {
           const response = await fetch('/api/web9999/', { headers: { Accept: 'application/json' } });
-          const status = await response.json();
-          if (!response.ok || !status.ok) throw new Error(status.error || `HTTP ${response.status}`);
+          const status = await readJson(response, 'the API');
+          if (!status.ok) throw new Error(status.error || `the API answered ${response.status}`);
 
           $('chain-id').textContent = `${status.chain.name} · ${status.chain.id}`;
           $('chain-head').textContent = num(status.chain.head) ?? '—';
@@ -314,7 +337,8 @@
         }
 
         try {
-          const markets = await (await fetch('/api/markets', { headers: { Accept: 'application/json' } })).json();
+          const answer = await fetch('/api/markets', { headers: { Accept: 'application/json' } });
+          const markets = await readJson(answer, '/api/markets');
           if (Array.isArray(markets.coins)) $('markets').textContent = num(markets.coins.length);
         } catch {
           $('markets').textContent = 'unavailable';
@@ -488,8 +512,8 @@
           const response = await fetch('/api/monero/stats.php', {
             headers: { Accept: 'application/json' },
           });
-          const payload = await response.json();
-          if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+          const payload = await readJson(response, '/api/monero/stats.php');
+          if (!payload.ok) throw new Error(payload.error || `the API answered ${response.status}`);
 
           const chain = payload.chain || {};
           const coin = payload.coin || {};
@@ -610,8 +634,8 @@
           const response = await fetch('/api/web9999/coins', {
             headers: { Accept: 'application/json' },
           });
-          const payload = await response.json();
-          if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+          const payload = await readJson(response, '/api/web9999/coins');
+          if (!payload.ok) throw new Error(payload.error || `the API answered ${response.status}`);
 
           if (payload.needs_schema) {
             body.replaceChildren();
@@ -942,9 +966,9 @@
               .then((answer) => (answer.ok ? answer.json() : null))
               .catch(() => null),
           ]);
-          const payload = await response.json();
-          if (!response.ok || !payload.ok) {
-            throw new Error(payload.error || 'HTTP ' + response.status);
+          const payload = await readJson(response, '/api/markets');
+          if (!payload.ok) {
+            throw new Error(payload.error || 'the API answered ' + response.status);
           }
 
           marketsState.coins = Array.isArray(payload.coins) ? payload.coins : [];
