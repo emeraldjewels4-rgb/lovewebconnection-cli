@@ -62,6 +62,50 @@ Set `CHROME_PATH` to a Chrome, Edge or Chromium binary to run it, or
 `LWC_SKIP_BROWSER=1 npm test` to skip only that file. See [CI and the browser
 test](#ci-and-the-browser-test) for what the workflow does with it.
 
+## Deploying the page
+
+`deploy/deploy-web9999.ps1` builds the bundle, copies it to the Windows VPS over
+SSH, installs it under IIS, and - on every deploy that is given an origin -
+configures the `/api/*` proxy that stands in for the rails this site cannot serve
+itself. A dry run builds the bundle and prints the commands without uploading or
+changing anything.
+
+```powershell
+.\deploy\deploy-web9999.ps1 -Upstream https://fiatgod.x10.mx -DryRun
+.\deploy\deploy-web9999.ps1 -Upstream https://fiatgod.x10.mx
+```
+
+`-Upstream` is the x10 origin the rails are proxied to. It accepts a subdirectory
+(`https://fiatgod.x10.mx/web9999-interface`), and that prefix is kept in front of
+`/api/{R:1}` in the rewrite and in the checks that probe it. Leave it out and the
+page still deploys; `/api/*` answers `404` until the proxy is configured, and the
+deploy says so - `rails: NOT proxied` - and prints the one command that fixes it,
+with `proxy-web9999.ps1` already uploaded.
+
+The bundle is `index.html`, `networks.json` beside it (generated from the chain
+presets on every build, and fetched relatively by the page), `api/`, and
+`serve.mjs`.
+
+`-Bind` chooses how the site is reachable: `127.0.0.1` for a tunnel, `0.0.0.0`
+for the public URL, omitted to keep whatever the site already has. Changing an
+existing site between the two needs `-AllowRebind`; the installer refuses
+otherwise. With no site on the server yet, the first deploy installs on loopback.
+
+### When the proxy step fails
+
+The proxy runs after the install, because it refuses unless the site exists, and
+its exit code decides what the server now has. Every failure fails the deploy -
+a page that loads and then 404s every read is not reported as a clean deploy.
+
+| exit | what it means | what to do |
+| --- | --- | --- |
+| 1 | the rule **is** installed and `/api/*` points at the origin, but the through-proxy request failed | check the origin from the server: DNS, TLS, the `/api/web9999/coins` path, and that the rails answer there |
+| 2 | it **refused** before changing anything - the rule was not added | read its `REFUSED` line: plain http, a bare host, a query string or fragment, `.`/`..` segments, a space in the path, or no site on the server to configure |
+| anything else | undocumented, so the server state is unknown | run `proxy-web9999.ps1` on the server and read what it says before redeploying |
+
+Database choices for this deploy are written up in
+[deploy/DATABASE-OPTIONS.md](deploy/DATABASE-OPTIONS.md).
+
 ## Connect
 
 ```bash

@@ -71,7 +71,9 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'node is not 
 if (-not (Test-Path $proxy)) { throw "no proxy-web9999.ps1 next to this script: a deploy without it would leave the rails unproxied" }
 
 # The proxy's rules for -Upstream, applied here first: a bad origin should cost a second, not a
-# bundle upload and a remote PowerShell error. Origin only - scheme and host, no path - because
+# bundle upload and a remote PowerShell error. Scheme, host and an optional subdirectory, held to
+# the same rules proxy-web9999.ps1 applies - the rails may be mounted under a path, and the deploy
+# must not refuse a form the proxy accepts.
 # anything else would rewrite requests to somewhere unintended.
 function Get-UpstreamOrigin {
   param([string]$Text)
@@ -81,10 +83,19 @@ function Get-UpstreamOrigin {
   if ($Text -notmatch '^https://') { throw "upstream must be https://, got '$Text' - plain http would put the API data on the wire in the clear" }
   $uri = $null
   if (-not [uri]::TryCreate($Text, [System.UriKind]::Absolute, [ref]$uri)) { throw "upstream '$Text' is not a URL" }
-  if ($uri.AbsolutePath -ne '/' -or $uri.Query -or $uri.Fragment) { throw "upstream must be an origin (no path, query or fragment), got '$Text'" }
-  # No host check: TryCreate already refuses every hostless form - "https:///x", "https://",
-  # "https://:8443/x" - so a test for an empty Host could never run.
-  '{0}://{1}' -f $uri.Scheme, $uri.Authority
+    if ($uri.Query -or $uri.Fragment) { throw "upstream must not carry a query string or fragment, got '$Text'" }
+  # A subdirectory is accepted, and kept in front of /api/{R:1}: some hosts mount the rails under a
+  # path (https://host/web9999-interface/api/web9999/coins). It is restricted to plain segments - no
+  # traversal, and no characters that could change the shape of the remote command line this value
+  # is embedded in.
+  # Checked on the text, not the parsed path: [uri] resolves "/app/../etc" to "/etc" before
+  # AbsolutePath is read, so a check on the parse could never see the traversal.
+  if ($Text -match '(?i)/(\.|%2e){1,2}(/|$)') { throw "upstream must not carry . or .. segments, got '$Text'" }
+  $path = $uri.AbsolutePath.TrimEnd('/')
+  if ($path -ne '' -and $path -notmatch '^(/[A-Za-z0-9._~-]+)+$') { throw "upstream path must be plain segments (letters, digits, . _ ~ -), got '$Text'" }
+  # No host check here: TryCreate already refuses every hostless form - "https:///x", "https://",
+  # "https://:8443/x" all return false above - so a test for an empty Host could never run.
+  '{0}://{1}{2}' -f $uri.Scheme, $uri.Authority, $path
 }
 
 # A bad origin is an operator mistake, not a crash. An uncaught throw exits 1 and prints the
@@ -111,6 +122,75 @@ $sshOptions = @('-p', $SshPort, '-o', 'StrictHostKeyChecking=accept-new')
 if ($KeyFile) {
   $scpOptions += @('-i', $KeyFile)
   $sshOptions += @('-i', $KeyFile)
+}
+
+# The bundle is the expensive part of a deploy - node networks.mjs, a staging copy, a zip - and a
+# refused login used to surface only after it, when scp failed. One ssh round trip proves the
+# credential first: BatchMode means this check can never sit at a prompt, and ConnectTimeout keeps
+# an unreachable host to ten seconds instead of the default two minutes.
+#
+# What it can be certain about: with -KeyFile the deploy declared one credential, so a refusal names
+# that file. Without it the check is publickey-only by design and the account may still take a
+# password - that case is a note and the deploy continues, because a password cannot be tested
+# without asking for it. Host key and connection failures are certain either way.
+function Test-SshLogin {
+  $authOptions = $sshOptions + @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10')
+  $savedEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $answer = & ssh @authOptions $remoteUser 'echo preflight-ok' 2>&1
+    $code = $LASTEXITCODE
+  } catch {
+    $answer = $null
+    $code = 255
+  } finally {
+    $ErrorActionPreference = $savedEap
+  }
+  # ssh writes its reason to stderr; two lines are enough to say which credential it was.
+  $said = (@($answer) | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -First 2) -join ' '
+  if ($code -eq 0) { return @{ Outcome = 'ok'; Note = ''; Fix = '' } }
+
+  $who = '{0} on port {1}' -f $remoteUser, $SshPort
+  $key = $(if ($KeyFile) { 'the key ' + $KeyFile } else { 'the default keys in your .ssh folder' })
+  if ($said -match '(?i)host key verification failed') {
+    return @{ Outcome = 'refused'; Note = ('the host key for {0} is not the one known_hosts already holds - the server was rebuilt, or something is answering as it' -f $VpsHost);
+      Fix = ('if the rebuild is real, drop the old key and let ssh record the new one: ssh-keygen -R {0}' -f $VpsHost) }
+  }
+  if ($said -match '(?i)no such identity|identity file .* not accessible|authentication agent') {
+    return @{ Outcome = 'refused'; Note = ('{0} cannot be read, so nothing could be offered to {1}' -f $key, $who);
+      Fix = $(if ($KeyFile) { 'check the path in -KeyFile.' } else { 'no default key is readable; pass -KeyFile, or leave it off to be prompted for a password.' }) }
+  }
+  if ($said -match '(?i)permission denied') {
+    if (-not $KeyFile -and $said -match '(?i)password') {
+      return @{ Outcome = 'password'; Note = ('{0} refused publickey and the account also takes a password. Continuing - scp will ask for it. ssh said: {1}' -f $who, $said); Fix = '' }
+    }
+    return @{ Outcome = 'refused'; Note = ('{0} refused {1} - the credential, not the network, is what failed. ssh said: {2}' -f $who, $key, $said);
+      Fix = $(if ($KeyFile) { ('that key is not in the account''s authorized_keys on {0}; install it there, or drop -KeyFile to be prompted for the password instead.' -f $VpsHost) } else { 'no default key is authorised on the account; pass -KeyFile with the key that is, or add this machine''s key to the account.' }) }
+  }
+  if ($said -match '(?i)connection refused') {
+    return @{ Outcome = 'refused'; Note = ('nothing is listening on {0} port {1}' -f $VpsHost, $SshPort); Fix = ('check the port: this deploy used -SshPort {0}.' -f $SshPort) }
+  }
+  if ($said -match '(?i)timed out|no route to host|network is unreachable|connection closed') {
+    return @{ Outcome = 'refused'; Note = ('{0} did not answer within 10s' -f $who); Fix = ('the host or the port is filtered; check -VpsHost and -SshPort {0}.' -f $SshPort) }
+  }
+  return @{ Outcome = 'refused'; Note = ('the login preflight failed (ssh exit {0}) on {1}. ssh said: {2}' -f $code, $who, $said); Fix = 'run the same ssh by hand with -v to see which step fails.' }
+}
+
+# Not in a dry run: printing the commands is a dry run's whole job, and it has to work from a
+# machine that cannot reach the server at all.
+if (-not $DryRun) {
+  $login = Test-SshLogin
+  if ($login.Outcome -eq 'refused') {
+    Write-Host ('  REFUSED: ' + $login.Note)
+    Write-Host ('  nothing was built and nothing was uploaded - the deploy stopped before the bundle.')
+    if ($login.Fix) { Write-Host ('  ' + $login.Fix) }
+    exit 2
+  }
+  if ($login.Outcome -eq 'password') {
+    Write-Host ('  note      ' + $login.Note)
+  } else {
+    Write-Host ('  login     {0} on port {1} accepted' -f $remoteUser, $SshPort)
+  }
 }
 
 # One ssh call, before the bundle is built: what the site is bound to now. IIS reports an
@@ -148,7 +228,13 @@ function Get-ServerBind {
 $bindMode = $Bind
 $bindNote = '-Bind was given'
 if (-not $bindMode) {
-  $current = Get-ServerBind
+  # Same rule as -Upstream above: a binding this deploy cannot express is an operator decision to
+  # make, not a crash. Uncaught, the throw printed the sentence inside a CategoryInfo dump and a
+  # caret, under exit 1 - measured with a stub returning '192.168.1.5:8782:'.
+  $current = try { Get-ServerBind } catch {
+    Write-Host ('  REFUSED: ' + $_.Exception.Message)
+    exit 2
+  }
   $bindMode = $current.Bind
   $bindNote = $current.Note
   if (-not $bindMode) {
@@ -161,7 +247,10 @@ if (-not $bindMode) {
   }
 }
 if ($bindMode -ne '127.0.0.1' -and $bindMode -ne '0.0.0.0') {
-  throw ("-Bind '$bindMode' is not an address; use 127.0.0.1 or 0.0.0.0, or leave it out to adopt the site's binding")
+  # Refused, not thrown: the throw here printed the sentence inside a CategoryInfo dump under
+  # exit 1, while every other bad-argument path in this script prints one line and exits 2.
+  Write-Host ("  REFUSED: -Bind '{0}' is not an address; use 127.0.0.1 or 0.0.0.0, or leave it out to adopt the site's binding" -f $bindMode)
+  exit 2
 }
 
 $installCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' + $remoteInstallerWindows + ' -WebPort ' + $WebPort + ' -Bind ' + $bindMode
@@ -178,17 +267,17 @@ function Show-Access {
   if ($isPublic) {
     Write-Host ('  page: {0}' -f $publicUrl)
     Write-Host ('  bound to 0.0.0.0:{0} on the server, firewall open - no tunnel needed.' -f $WebPort)
-    Write-Host ('  a tunnel works too: {0}' -f $tunnelCommand)
   } else {
     Write-Host ('  page: loopback-only on the server (127.0.0.1:{0}); nothing listens outside.' -f $WebPort)
     Write-Host ('  open a tunnel from here, then browse http://127.0.0.1:{0}/ :' -f $WebPort)
     Write-Host ('    {0}' -f $tunnelCommand)
     Write-Host ('  that forwards http://127.0.0.1:{0}/ to the server; Ctrl-C closes it.' -f $WebPort)
-    if (-not $AllowRebind -and $Bind) {
-      Write-Host ''
-      Write-Host ('  -Bind {0} was asked for explicitly. If the site is exposed differently today, the' -f $Bind)
-      Write-Host '  installer refuses rather than change that: add -AllowRebind to make the switch on purpose.'
-    }
+  }
+  # Applies to both modes: the gate is about changing exposure, which cuts either way.
+  if (-not $AllowRebind -and $Bind) {
+    Write-Host ''
+    Write-Host ('  -Bind {0} was asked for explicitly. If the site is exposed differently today, the' -f $Bind)
+    Write-Host '  installer refuses rather than change that: add -AllowRebind to make the switch on purpose.'
   }
   if ($proxyCommand) {
     Write-Host ('  rails: /api/* on the server is proxied to {0}' -f $upstreamOrigin)
@@ -204,28 +293,42 @@ $stage = Join-Path ([System.IO.Path]::GetTempPath()) ('web9999-stage-' + [guid]:
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 try {
   # networks.json is generated, never hand-edited: it is the page's chain table read from
-  # CHAIN_PRESETS in src/chain.ts. It belongs in the bundle at the path the page asks for,
-  # /web9999/networks.json - and not in the proxy rule, which forwards /api/* only. Generating it
-  # here, instead of trusting a committed copy, means the bundle cannot ship a table that
-  # disagrees with the presets this build came from.
+  # CHAIN_PRESETS in src/chain.ts. It is bundle content and not a proxy path: the proxy forwards
+  # /api/* only, and forwarding this would ask x10 for a file this build generates. It ships beside
+  # index.html, because the page fetches it relatively ("networks.json"), so the same bundle works
+  # whether the site is served at the domain root or under a subdirectory.
   # Named before it is run: without it node writes "Cannot find module" to stderr, which under
   # $ErrorActionPreference = 'Stop' surfaces as a terminating error that buries the one fact worth
   # knowing - the file the deploy needs is not in this checkout.
   $generator = Join-Path $PSScriptRoot 'networks.mjs'
-  if (-not (Test-Path $generator)) { throw ('no networks.mjs next to this script: it generates web9999/networks.json, which the page fetches at /web9999/networks.json') }
+  if (-not (Test-Path $generator)) { throw ('no networks.mjs next to this script: it generates web9999/networks.json, which the page fetches as networks.json beside itself') }
   & node $generator
   if ($LASTEXITCODE -ne 0) { throw ('generating networks.json failed (exit {0}) - run npm run build, then retry' -f $LASTEXITCODE) }
   Copy-Item (Join-Path $siteDir 'index.html') $stage
-  # The page asks for /web9999/networks.json absolutely and the site is bound at the root
-  # (New-Website -PhysicalPath C:\web9999, port 8782), so the file has to sit in a web9999
-  # directory under the site root - at the root itself that URL would 404.
-  $networksDir = Join-Path $stage 'web9999'
-  New-Item -ItemType Directory -Path $networksDir -Force | Out-Null
-  Copy-Item (Join-Path $siteDir 'networks.json') $networksDir
+  Copy-Item (Join-Path $siteDir 'networks.json') $stage
+  # A second copy under web9999/: a page deployed before this change asks for the absolute
+  # /web9999/networks.json, and a browser still running that index.html would 404 against a
+  # root-only file. One generated file, two paths, so no version of the page can miss it.
+  $compatDir = Join-Path $stage 'web9999'
+  New-Item -ItemType Directory -Path $compatDir -Force | Out-Null
+  Copy-Item (Join-Path $siteDir 'networks.json') $compatDir
   if (Test-Path $apiDir) { Copy-Item $apiDir (Join-Path $stage 'api') -Recurse }
   Copy-Item (Join-Path $PSScriptRoot 'serve.mjs') $stage
   if (Test-Path $bundle) { Remove-Item $bundle -Force }
   Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $bundle -CompressionLevel Optimal
+
+  # The page fetches networks.json relative to itself, and a bundle without it deploys a site whose chain
+  # table reads "networks.json is missing from this build". Checked on the archive rather than on the
+  # stage, so a change to how the stage is assembled cannot quietly drop it again. Compress-Archive
+  # stores backslashes, so entries are normalised before the comparison.
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $archive = [System.IO.Compression.ZipFile]::OpenRead($bundle)
+  try { $entries = @($archive.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }) }
+  finally { $archive.Dispose() }
+  if ($entries -notcontains 'networks.json' -or $entries -notcontains 'web9999/networks.json') {
+    throw ('the bundle needs networks.json beside index.html and again at web9999/networks.json, which the chain table is fetched from (it has: {0})' -f ($entries -join ', '))
+  }
+  Write-Host '    bundle contains networks.json beside index.html and at web9999/networks.json'
   Write-Host ('  bundle: {0} ({1:N0} bytes)' -f $bundle, (Get-Item $bundle).Length)
 } finally {
   Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
