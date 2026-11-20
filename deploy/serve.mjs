@@ -134,6 +134,71 @@ function proxyToUpstream(req, res, upstream) {
   req.pipe(forwarded);
 }
 
+// What an answer to /api/web9999/coins actually is. A base path one directory too high - or an
+// origin that serves the site itself - comes back 200 with HTML, and a proxy that looks only at the
+// status reports the rails as configured while the page fails to parse what it got. The same test,
+// in the same words, as Test-ApiAnswer in proxy-web9999.ps1, so the two servers agree on "working".
+function classifyCoinsAnswer(contentType, body) {
+  const type = String(contentType ?? '').split(';')[0].trim().toLowerCase();
+  const text = String(body ?? '').trimStart();
+  const kind =
+    /^(<!doctype html|<html|<head|<body)/i.test(text) || type.includes('html')
+      ? 'HTML'
+      : type === 'application/json' || /^[{\[]/.test(text)
+        ? 'JSON'
+        : 'something else';
+  if (type !== 'application/json') {
+    const served = type ? `as ${type}` : 'with no content type';
+    return { ok: false, kind, why: `it answered with ${kind}, ${served}, not application/json` };
+  }
+  if (!text) return { ok: false, kind, why: 'the content type says JSON but the body is empty' };
+  try {
+    JSON.parse(text);
+  } catch {
+    return { ok: false, kind, why: 'the content type says JSON but the body does not parse as JSON' };
+  }
+  return { ok: true, kind, why: '' };
+}
+
+// Said once, at startup, because the alternative is finding out from a page that silently renders
+// nothing: this proxy copies whatever the origin answers, so a wrong base path is a 200 the browser
+// cannot parse. Not fatal - the page still loads and its other cells still work - and it adds no
+// exit code, so the contract this server already has is unchanged.
+function checkUpstreamCoins(upstream) {
+  const target = `${upstream.text}/api/web9999/coins`;
+  const chunks = [];
+  const probe = httpsRequest(
+    target,
+    { method: 'GET', timeout: UPSTREAM_TIMEOUT_MS, headers: { accept: 'application/json' } },
+    (answer) => {
+      answer.on('data', (chunk) => {
+        if (chunks.length < 64) chunks.push(chunk);
+      });
+      answer.on('end', () => {
+        const status = answer.statusCode ?? 0;
+        const verdict = classifyCoinsAnswer(answer.headers['content-type'], Buffer.concat(chunks).toString('utf8'));
+        if (status < 200 || status >= 300) {
+          console.log(
+            `  rails check: ${target} answered HTTP ${status}; the rails are not there - check -Upstream, and that api/web9999/coins exists at the origin`
+          );
+          return;
+        }
+        if (verdict.ok) {
+          console.log(`  rails check: ${target} answers JSON`);
+          return;
+        }
+        console.log(`  rails check: MISROUTED BASE PATH - ${target} ${verdict.why}`);
+        console.log(
+          '               the page cannot parse that, so its coin table reads as unavailable; -Upstream must be the directory that holds api/web9999/coins'
+        );
+      });
+    }
+  );
+  probe.on('timeout', () => probe.destroy(new Error(`no answer within ${UPSTREAM_TIMEOUT_MS / 1000}s`)));
+  probe.on('error', (error) => console.log(`  rails check: could not reach ${target}: ${error.message}`));
+  probe.end();
+}
+
 const root = positional[0] ?? '.';
 const port = Number(positional[1] ?? 8782);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -192,4 +257,5 @@ createServer(async (request, response) => {
   if (bind === '127.0.0.1') {
     console.log(`  reach it through a tunnel: ssh -N -L ${port}:127.0.0.1:${port} <user>@<server>`);
   }
+  if (upstream) checkUpstreamCoins(upstream);
 });
