@@ -193,6 +193,42 @@ import {
   toPresetHistoryJson,
 } from "./presets-history.ts";
 
+/**
+ * Printed by `lwc --help`, `lwc -h` and `lwc help`. A help request has to answer
+ * on a host that has no .env yet, so it is handled before anything reads the
+ * environment or the chain config.
+ */
+const HELP_TEXT = `lwc — read-only EVM chain connection kit
+
+usage: lwc <command> [options]
+
+commands:
+  chain             connection health for the configured endpoint (default)
+  presets           probe every built-in chain preset
+  presets-history   read, gate and export the recorded preset runs
+  balances          read native and ERC-20 balances for an owner
+  tokens            verify token addresses and write a token list
+  views             run every view function on a contract
+  signatures        list the callable functions of an ABI
+  call              call one view function with typed arguments
+  example           print an example call for the built-in ABI
+  scan              read balances for many addresses at once
+  compare           compare two RPC endpoints
+  compare-history   read and export the recorded comparisons
+  watch             poll the chain and alert on stalls or thresholds
+  sessions          summarize the recorded watch sessions
+  history           read the recorded balance history
+  plot              chart the recorded balance history
+  cache             inspect or clear cached token metadata
+  market            fixed-price market on a pair of tokens
+
+options:
+  --chain <name|id>  use a built-in preset instead of the environment
+  --json             print the same report as JSON
+  -h, --help         print this help
+
+Each command's own flags are in the README.`;
+
 const argv = process.argv.slice(2);
 const command = argv[0] ?? "";
 const isBalances = command === "balances";
@@ -213,6 +249,13 @@ const isMarket = command === "market";
 const isPresets = command === "presets";
 const isPresetHistory = command === "presets-history";
 const isHealth = command === "" || command === "chain" || command.startsWith("-");
+
+// Answered before the config is read: `lwc --help` used to reach parseChainConfig
+// first and exit 1 with "LWC_CHAIN_ID is required" on a host with no .env.
+if (command === "help" || command === "--help" || command === "-h") {
+  console.log(HELP_TEXT);
+  process.exit(0);
+}
 
 if (
   !isHealth &&

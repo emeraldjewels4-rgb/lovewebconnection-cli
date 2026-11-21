@@ -140,7 +140,11 @@ Database choices for this deploy are written up in
 npm run chain          # human-readable health report
 npm run chain:json     # same data as JSON
 lwc chain --chain base # one preset, without touching .env
+lwc --help             # every command, and the global options
 ```
+
+`lwc --help` answers before the chain config is read, so it works on a host that
+has no `.env` yet. The per-command flags are in the sections below.
 
 Example output:
 
