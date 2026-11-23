@@ -141,10 +141,12 @@ npm run chain          # human-readable health report
 npm run chain:json     # same data as JSON
 lwc chain --chain base # one preset, without touching .env
 lwc --help             # every command, and the global options
+lwc balances --help    # one command's own flags, and its README section
 ```
 
-`lwc --help` answers before the chain config is read, so it works on a host that
-has no `.env` yet. The per-command flags are in the sections below.
+`lwc --help` and `lwc <command> --help` answer before the chain config is read,
+so they work on a host that has no `.env` yet. Each command's help lists its own
+flags and names the section below that documents them in full.
 
 Example output:
 

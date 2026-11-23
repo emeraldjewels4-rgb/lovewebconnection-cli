@@ -194,40 +194,358 @@ import {
 } from "./presets-history.ts";
 
 /**
- * Printed by `lwc --help`, `lwc -h` and `lwc help`. A help request has to answer
- * on a host that has no .env yet, so it is handled before anything reads the
- * environment or the chain config.
+ * Per-command help, answered by `lwc <command> --help` and `lwc help <command>`.
+ * It is a table rather than a pass through the flag parsers, so answering a help
+ * request never reads the environment, the chain config, or the network.
  */
+interface CommandHelp {
+  /** One line after the command name in the heading. */
+  summary: string;
+  /** How to call it, including the positional arguments it needs. */
+  usage: string;
+  /** The command's own flags, as `[flag, description]`. */
+  flags: ReadonlyArray<readonly [string, string]>;
+  /** The README heading and anchor that document it in full. */
+  readme: string;
+}
+
+const COMMAND_HELP: Record<string, CommandHelp> = {
+  chain: {
+    summary: "connection health for the configured endpoint (default)",
+    usage: "lwc chain [--chain <name|id>] [--json]",
+    flags: [],
+    readme: "Connect — README.md#connect",
+  },
+  presets: {
+    summary: "probe every built-in chain preset",
+    usage: "lwc presets [--timeout <ms>] [--history <path>] [--json]",
+    flags: [
+      ["--timeout <ms>", "per-endpoint budget, 250-120000 (default 8000)"],
+      ["--history <path>", "append this run to a JSONL history file"],
+      ["--json", "machine-readable report; still exits 1 when a preset is unhealthy"],
+    ],
+    readme: "Chains — README.md#chains",
+  },
+  "presets-history": {
+    summary: "read, gate and export the recorded preset runs",
+    usage: "lwc presets-history <history.jsonl> [options]",
+    flags: [
+      ["--since <when>", "runs since a timestamp or a span like 24h or 7d"],
+      ["--until <when>", "runs up to a timestamp or a span"],
+      ["--limit <n>", "keep only the newest n runs"],
+      ["--csv <path>", "one row per preset, or - for stdout"],
+      ["--timeline <path>", "one row per preset per run, or - for stdout"],
+      ["--compare <a..b>", "compare two windows, e.g. 14d..7d"],
+      ["--fail-under <pct>", "exit 1 when a preset's uptime is below this percentage"],
+      ["--check", "gate on freshness as well as uptime; needs --fail-under"],
+      ["--freshness-rows <n>", "shape the check report; needs --check"],
+      ["--max-age <span>", "bound the gate to recent runs, e.g. 7d; needs --check"],
+      ["--merge <path>", "fold another history file in (repeatable)"],
+      ["--out <path>", "write the merged history; needs --merge"],
+      ["--retain <span>", "trim the merged history, e.g. 180d; needs --merge"],
+      ["--json", "machine-readable report"],
+    ],
+    readme: "Chains — README.md#chains",
+  },
+  balances: {
+    summary: "read native and ERC-20 balances for an owner",
+    usage: "lwc balances <owner> [options]",
+    flags: [
+      ["--token <address>", 'repeatable token contract, optionally "0x…:Label"'],
+      ["--tokens <list>", "comma-separated token addresses"],
+      ["--tokens-file <path>", "JSON token list, with optional labels"],
+      ["--batch-size <n>", "tokens per Multicall3 request, 1-100"],
+      ["--max-subcalls <n>", "cap aggregate3 sub-calls instead of --batch-size"],
+      ["--fail-on-retry", "exit 1 when a chunk needed recovery"],
+      ["--verbose", "one line per Multicall3 chunk on stderr"],
+      ["--max-cache-age <span>", "ignore cached metadata older than this"],
+      ["--stale-after <span>", "flag balances from a block older than this"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Balances — README.md#balances",
+  },
+  tokens: {
+    summary: "verify token addresses and write a token list",
+    usage: "lwc tokens <address...> --out <path> [options]",
+    flags: [
+      ["--token <address>", 'repeatable token, optionally "0x…:Label"'],
+      ["--tokens <list>", "comma-separated token addresses"],
+      ["--out <path>", "where to write the list, or - for stdout"],
+      ["--merge", "merge into the list already at --out"],
+      ["--force", "overwrite an existing file at --out"],
+      ["--max-subcalls <n>", "cap aggregate3 sub-calls for the metadata reads"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Saving a token list — README.md#saving-a-token-list",
+  },
+  views: {
+    summary: "run every view function on a contract",
+    usage: "lwc views <address> [--abi <file>] [options]",
+    flags: [
+      ["--abi <file>", "ABI to read; defaults to the built-in ERC-20 ABI"],
+      ["--args <json>", "arguments for the view functions, as a JSON map or array"],
+      ["--block <n|latest>", "read at a block instead of the head"],
+      ["--max-subcalls <n>", "cap aggregate3 sub-calls for the view batch"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Running every view function — README.md#running-every-view-function",
+  },
+  signatures: {
+    summary: "list the callable functions of an ABI",
+    usage: "lwc signatures [abi.json] [--json]",
+    flags: [["--json", "print the same report as JSON"]],
+    readme: "Listing callable signatures — README.md#listing-callable-signatures",
+  },
+  call: {
+    summary: "call one view function with typed arguments",
+    usage: "lwc call <address> <function|signature> [options]",
+    flags: [
+      ["--abi <file>", "ABI to read; defaults to the built-in ERC-20 ABI"],
+      ["--args <json>", "the function's arguments as a JSON array"],
+      ["--arg <value>", "one argument, repeatable; JSON or a literal string"],
+      ["--block <n|latest>", "read at a block instead of the head"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Calling any view function — README.md#calling-any-view-function",
+  },
+  example: {
+    summary: "print an example call for the built-in ABI",
+    usage: "lwc example [--json]",
+    flags: [["--json", "print the same report as JSON"]],
+    readme: "Example call — README.md#example-call",
+  },
+  scan: {
+    summary: "read balances for many addresses at once",
+    usage: "lwc scan [address...] [options]",
+    flags: [
+      ["--owner <address>", "add an owner (repeatable, alongside positional addresses)"],
+      ["--owners-file <path>", "JSON array, or an object with an owners or addresses array"],
+      ["--token <address>", 'repeatable token contract, optionally "0x…:Label"'],
+      ["--tokens <list>", "comma-separated token addresses"],
+      ["--tokens-file <path>", "JSON token list, with optional labels"],
+      ["--csv <path>", "one row per owner, or - for stdout"],
+      ["--batch-size <n>", "tokens per Multicall3 request, 1-100"],
+      ["--max-subcalls <n>", "cap aggregate3 sub-calls instead of --batch-size"],
+      ["--fail-on-retry", "exit 1 when any chunk needed recovery"],
+      ["--quiet", "suppress the per-chunk lines on stderr"],
+      ["--max-cache-age <span>", "ignore cached metadata older than this"],
+      ["--stale-after <span>", "flag balances from a block older than this"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Checking many addresses — README.md#checking-many-addresses",
+  },
+  compare: {
+    summary: "compare two RPC endpoints",
+    usage: "lwc compare <urlA> <urlB> [options]",
+    flags: [
+      ["--samples <n>", "samples per endpoint (default 5, at most 8 endpoints)"],
+      ["--interval <s>", "seconds between samples (default 1)"],
+      ["--endpoint-auth <label=header>", "auth header for one endpoint, e.g. label=Bearer $TOKEN"],
+      ["--log <path>", "append each run to an NDJSON log"],
+      ["--log-max-size <size>", "rotate the log above this size, e.g. 10mb"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Comparing RPC endpoints — README.md#comparing-rpc-endpoints",
+  },
+  "compare-history": {
+    summary: "read and export the recorded comparisons",
+    usage: "lwc compare-history <compare.ndjson> [--csv <path>] [--json]",
+    flags: [
+      ["--csv <path>", "one row per comparison, or - for stdout"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Logging comparisons — README.md#logging-comparisons",
+  },
+  watch: {
+    summary: "poll the chain and alert on stalls or thresholds",
+    usage: "lwc watch [options]",
+    flags: [
+      ["--interval <s>", "seconds between polls"],
+      ["--stall-after <s>", "alert when no new head arrives for this long"],
+      ["--samples <n>", "stop after n samples; 0 watches until stopped"],
+      ["--gas-surge <pct>", "alert when base fee rises by this percentage"],
+      ["--window <n>", "samples in the rolling reliability window"],
+      ["--report-every <n>", "print the rolling report every n samples"],
+      ["--owner <address>", "watch this owner's portfolio"],
+      ["--tokens-file <path>", "token list for the portfolio (with labels)"],
+      ["--portfolio-every <n>", "sample the portfolio every n polls"],
+      ["--usd", "price the portfolio in USD"],
+      ["--alert-latency <ms>", "alert when a request takes longer than this"],
+      ["--alert-block-time <s>", "alert when block time exceeds this"],
+      ["--alert-balance <pct>", "alert when a holding moves by this percentage"],
+      ["--alert-webhook <url>", "POST alerts to this URL; needs an alert threshold"],
+      ["--alert-webhook-auth <header>", "authorization header for the webhook"],
+      ["--alert-queue <path>", "spool undelivered webhook alerts here"],
+      ["--log <path>", "write the session as NDJSON"],
+      ["--log-max-size <size>", "rotate the log above this size, e.g. 10mb"],
+      ["--detach", "run in the background; needs --log"],
+      ["--stop", "stop the watcher owning this --log"],
+      ["--batch-size <n>", "tokens per Multicall3 request, 1-100"],
+      ["--max-subcalls <n>", "cap aggregate3 sub-calls instead of --batch-size"],
+      ["--verbose", "one line per Multicall3 chunk on stderr"],
+      ["--json", "print each event as JSON"],
+    ],
+    readme: "Watch mode — README.md#watch-mode",
+  },
+  sessions: {
+    summary: "summarize the recorded watch sessions",
+    usage: "lwc sessions <log.ndjson> [options]",
+    flags: [
+      ["--session <prefix>", "only sessions whose id starts with this (repeatable)"],
+      ["--since <when>", "only sessions since a timestamp or a span"],
+      ["--csv <path>", "one row per session, or - for stdout"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Comparing sessions — README.md#comparing-sessions",
+  },
+  history: {
+    summary: "read the recorded balance history",
+    usage: "lwc history <log.ndjson> [options]",
+    flags: [
+      ["--session <id>", "only this watch session"],
+      ["--csv <path>", "one row per asset per sample, or - for stdout"],
+      ["--wide", "pivot the CSV with one column per asset; needs --csv"],
+      ["--usd", "value the wide CSV's columns; needs --wide"],
+      ["--usd-only", "emit only the USD total in the wide CSV; needs --wide"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Charting balance history — README.md#charting-balance-history",
+  },
+  plot: {
+    summary: "chart the recorded balance history",
+    usage: "lwc plot <history.csv> [--width <n>] [--json]",
+    flags: [
+      ["--width <n>", "chart width in columns (default 48)"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Charting balance history — README.md#charting-balance-history",
+  },
+  cache: {
+    summary: "inspect or clear cached token metadata",
+    usage: "lwc cache [--clear <address>] [--json]",
+    flags: [
+      ["--clear <address>", "drop this token from the cache (repeatable)"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Inspecting and clearing cached metadata — README.md#inspecting-and-clearing-cached-metadata",
+  },
+  market: {
+    summary: "fixed-price market on a pair of tokens",
+    usage: "lwc market --pool <path> [options]",
+    flags: [
+      ["--pool <path>", "the pool file to read or create (required)"],
+      ["--init", "create the pool; needs --price, --base, --quote and --seed"],
+      ["--price <quote per base>", "initial price for --init"],
+      ["--base <symbol>", "base symbol for --init"],
+      ["--quote <symbol>", "quote symbol for --init"],
+      ["--base-decimals <n>", "base decimals for --init"],
+      ["--quote-decimals <n>", "quote decimals for --init"],
+      ["--fee-bps <n>", "fee in basis points (default 30 = 0.3%)"],
+      ["--seed <quote amount>", "quote liquidity for --init"],
+      ["--buy <quote amount>", "buy base with this much quote"],
+      ["--sell <base amount>", "sell this much base for quote"],
+      ["--add <quote amount>", "add liquidity with this much quote"],
+      ["--add-base <base amount>", "add liquidity with this much base"],
+      ["--remove <shares|all>", "remove liquidity"],
+      ["--dry-run", "quote a swap without applying it"],
+      ["--force", "overwrite an existing pool file with --init"],
+      ["--serve", "serve the pool and the swap page over HTTP"],
+      ["--port <n>", "port for --serve"],
+      ["--host <addr>", "bind address for --serve"],
+      ["--cors <origin>", "allow this origin (repeatable)"],
+      ["--api-key <key>", "require this key on the HTTP API"],
+      ["--rate-limit <n>", "requests per minute per client"],
+      ["--limits-file <path>", "read the serve limits from this file"],
+      ["--json", "print the same report as JSON"],
+    ],
+    readme: "Fixed-price market — README.md#fixed-price-market",
+  },
+};
+
+/**
+ * Printed by `lwc --help`, `lwc -h` and `lwc help`, and the source of the
+ * unknown-command usage line: both read COMMAND_HELP, so a new command is added
+ * to that table alone. A help request has to answer on a host that has no .env
+ * yet, so it is handled before anything reads the environment or the config.
+ */
+// Three spaces past the longest name, so a future long command widens the column
+// instead of colliding with the summaries.
+const COMMAND_NAME_WIDTH =
+  Math.max(...Object.keys(COMMAND_HELP).map((name) => name.length)) + 3;
+
+const COMMAND_HELP_ROWS = Object.entries(COMMAND_HELP).map(
+  ([name, help]) => `  ${name.padEnd(COMMAND_NAME_WIDTH)}${help.summary}`,
+);
+
 const HELP_TEXT = `lwc — read-only EVM chain connection kit
 
 usage: lwc <command> [options]
 
 commands:
-  chain             connection health for the configured endpoint (default)
-  presets           probe every built-in chain preset
-  presets-history   read, gate and export the recorded preset runs
-  balances          read native and ERC-20 balances for an owner
-  tokens            verify token addresses and write a token list
-  views             run every view function on a contract
-  signatures        list the callable functions of an ABI
-  call              call one view function with typed arguments
-  example           print an example call for the built-in ABI
-  scan              read balances for many addresses at once
-  compare           compare two RPC endpoints
-  compare-history   read and export the recorded comparisons
-  watch             poll the chain and alert on stalls or thresholds
-  sessions          summarize the recorded watch sessions
-  history           read the recorded balance history
-  plot              chart the recorded balance history
-  cache             inspect or clear cached token metadata
-  market            fixed-price market on a pair of tokens
+${COMMAND_HELP_ROWS.join("\n")}
 
 options:
   --chain <name|id>  use a built-in preset instead of the environment
   --json             print the same report as JSON
   -h, --help         print this help
 
-Each command's own flags are in the README.`;
+Run \`lwc <command> --help\` for a command's own flags.`;
+
+const GLOBAL_HELP: ReadonlyArray<readonly [string, string]> = [
+  ["--chain <name|id>", "use a built-in preset instead of the environment"],
+  ["--json", "print the same report as JSON"],
+  ["--cache-file <path>", "token metadata cache path (balances, scan, tokens, watch, cache)"],
+  ["--refresh-cache", "re-read token metadata instead of trusting the cache"],
+  ["--no-cache", "read token metadata without reading or writing the cache"],
+  ["-h, --help", "print this help"],
+];
+
+/** `--help` counts only as the last argument, so a flag's value is never help. */
+function wantsHelp(args: string[]): boolean {
+  const last = args[args.length - 1];
+  return last === "--help" || last === "-h";
+}
+
+/**
+ * The command a help request is about: "" for the top-level help, otherwise a
+ * command name that has to be in COMMAND_HELP.
+ */
+function helpTargetFor(command: string, args: string[]): string {
+  if (command === "help") {
+    const target = args[1] ?? "";
+    return target.startsWith("-") ? "" : target;
+  }
+  if (command.startsWith("-")) return "";
+  return wantsHelp(args) ? command : "";
+}
+
+function formatCommandHelp(name: string, help: CommandHelp): string {
+  // A flag already described by the global block is not repeated, unless the
+  // command's description adds something (presets notes that --json still exits 1).
+  const ownFlags = help.flags.filter(
+    ([flag, description]) =>
+      !GLOBAL_HELP.some(
+        ([globalFlag, globalDescription]) =>
+          globalFlag === flag && globalDescription === description,
+      ),
+  );
+  const width = Math.max(
+    20,
+    ...ownFlags.map(([flag]) => flag.length + 2),
+    ...GLOBAL_HELP.map(([flag]) => flag.length + 2),
+  );
+  const row = (flag: string, description: string): string =>
+    `  ${flag.padEnd(width)}${description}`;
+  const lines = [`lwc ${name} — ${help.summary}`, "", `usage: ${help.usage}`];
+  if (ownFlags.length > 0) {
+    lines.push("", "options:");
+    lines.push(...ownFlags.map(([flag, description]) => row(flag, description)));
+  }
+  lines.push("", "global options:");
+  lines.push(...GLOBAL_HELP.map(([flag, description]) => row(flag, description)));
+  lines.push("", `README: ${help.readme}`);
+  return lines.join("\n");
+}
 
 const argv = process.argv.slice(2);
 const command = argv[0] ?? "";
@@ -250,36 +568,41 @@ const isPresets = command === "presets";
 const isPresetHistory = command === "presets-history";
 const isHealth = command === "" || command === "chain" || command.startsWith("-");
 
-// Answered before the config is read: `lwc --help` used to reach parseChainConfig
-// first and exit 1 with "LWC_CHAIN_ID is required" on a host with no .env.
-if (command === "help" || command === "--help" || command === "-h") {
-  console.log(HELP_TEXT);
+// Answered before anything reads the environment or the chain config: `lwc
+// --help` used to reach parseChainConfig first and exit 1 with "LWC_CHAIN_ID is
+// required" on a host with no .env, and `lwc balances --help` died in the same
+// place. A trailing help flag on a known command prints that command's own
+// flags; `lwc help <command>` does the same.
+const helpTarget = helpTargetFor(command, argv);
+if (helpTarget) {
+  const help = COMMAND_HELP[helpTarget];
+  if (!help) {
+    console.error(`unknown command: ${helpTarget}`);
+    console.error("usage: lwc <command> [--help]   (lwc --help lists the commands)");
+    process.exit(1);
+  }
+  console.log(formatCommandHelp(helpTarget, help));
   process.exit(0);
 }
 
 if (
-  !isHealth &&
-  !isBalances &&
-  !isTokens &&
-  !isViews &&
-  !isExample &&
-  !isWatch &&
-  !isCall &&
-  !isScan &&
-  !isCompare &&
-  !isSessions &&
-  !isHistory &&
-  !isCompareHistory &&
-  !isSignatures &&
-  !isCache &&
-  !isMarket &&
-  !isPresets &&
-  !isPresetHistory &&
-  !isPlot
+  command === "help" ||
+  command === "--help" ||
+  command === "-h" ||
+  (isHealth && wantsHelp(argv))
 ) {
+  console.log(HELP_TEXT);
+  process.exit(0);
+}
+
+// The health/default path is the only command outside the table, so every other
+// name is checked against COMMAND_HELP: a new command is one table entry rather
+// than a table row plus a clause here.
+if (!isHealth && !Object.hasOwn(COMMAND_HELP, command)) {
   console.error(`unknown command: ${command}`);
+  // Derived from COMMAND_HELP so a new command is added in one place only.
   console.error(
-    "usage: lwc [chain|presets|presets-history|balances|tokens|views|signatures|example|scan|compare|compare-history|watch|call|sessions|history|plot|cache|market] [--chain <name|id>] [--json]",
+    `usage: lwc [${Object.keys(COMMAND_HELP).join("|")}] [--chain <name|id>] [--json]`,
   );
   process.exit(1);
 }
