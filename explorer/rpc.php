@@ -30,7 +30,8 @@
  *
  * There is no per-IP throttle: a request counter needs shared state that this
  * file does not have, and the edge is the right place for it. explorer/README.md
- * records that as the next step if the quota is ever abused.
+ * carries the rule ("Rate-limit the proxy at the edge"): which path it matches,
+ * 60 requests a minute by IP, and what a limited visitor sees.
  */
 declare(strict_types=1);
 
