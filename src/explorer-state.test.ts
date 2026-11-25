@@ -2,10 +2,32 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  PROBE_CACHE_KEY,
+  PROBE_CACHE_MS,
   createLookupTracker,
   lookupUrl,
   readLookupParams,
+  readProbeCache,
+  writeProbeCache,
 } from "../explorer/lookup-state.js";
+import type { ProbeResults } from "../explorer/lookup-state.js";
+
+/** Stands in for localStorage: the helpers only ever call these two methods. */
+function memoryStorage() {
+  const entries = new Map<string, string>();
+  return {
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => void entries.set(key, value),
+    entries,
+  };
+}
+
+const PROBES: ProbeResults = {
+  ethereum: { ok: true, block: 19_000_001n, ms: 120, via: "primary" },
+  base: { ok: false, error: "timeout" },
+};
+
+const CHAINS = ["ethereum", "base"];
 
 test("reads chain, type and query from a lookup URL", () => {
   assert.deepEqual(
@@ -94,6 +116,86 @@ test("a lookup started after cancel is current", () => {
   assert.equal(tracker.isCurrent(fresh.seq), true);
   assert.equal(tracker.isCurrent(stale.seq), false);
   assert.equal(fresh.signal.aborted, false);
+});
+
+test("a probe cache round-trips, including a failed probe and the block number", () => {
+  const storage = memoryStorage();
+  writeProbeCache(storage, PROBES, 1_000);
+
+  const cached = readProbeCache(storage, CHAINS, 1_000 + 30_000);
+  assert.ok(cached);
+  assert.equal(cached.savedAt, 1_000, "the probe's own time comes back with it");
+  assert.equal(cached.results.ethereum?.ok, true);
+  assert.equal(cached.results.ethereum?.block, 19_000_001n);
+  assert.equal(cached.results.ethereum?.ms, 120);
+  assert.equal(cached.results.ethereum?.via, "primary");
+  assert.deepEqual(cached.results.base, { ok: false, error: "timeout" });
+});
+
+test("the stored form is JSON, with the block number as a decimal string", () => {
+  const storage = memoryStorage();
+  writeProbeCache(storage, PROBES, 1_000);
+
+  const raw = JSON.parse(storage.getItem(PROBE_CACHE_KEY) as string);
+  assert.equal(raw.savedAt, 1_000);
+  assert.equal(raw.probes.ethereum.block, "19000001");
+  assert.equal(raw.probes.base.ok, false);
+});
+
+test("a cache older than the window is ignored, and one inside it is not", () => {
+  const storage = memoryStorage();
+  writeProbeCache(storage, PROBES, 1_000);
+
+  assert.ok(readProbeCache(storage, CHAINS, 1_000 + PROBE_CACHE_MS - 1));
+  assert.equal(readProbeCache(storage, CHAINS, 1_000 + PROBE_CACHE_MS), null);
+  assert.equal(readProbeCache(storage, CHAINS, 1_000 + 5 * 60_000), null);
+});
+
+test("a clock that ran backwards still counts as inside the window", () => {
+  const storage = memoryStorage();
+  writeProbeCache(storage, PROBES, 60_000);
+
+  assert.ok(readProbeCache(storage, CHAINS, 50_000));
+});
+
+test("a cache missing one of the presets is not used", () => {
+  const storage = memoryStorage();
+  writeProbeCache(storage, PROBES, 1_000);
+
+  assert.equal(readProbeCache(storage, [...CHAINS, "polygon"], 2_000), null);
+});
+
+test("absent, corrupt or unusable storage is a miss rather than a throw", () => {
+  assert.equal(readProbeCache(null, CHAINS, 1_000), null);
+
+  const corrupt = memoryStorage();
+  corrupt.setItem(PROBE_CACHE_KEY, "{not json");
+  assert.equal(readProbeCache(corrupt, CHAINS, 1_000), null);
+
+  const wholeTable = memoryStorage();
+  wholeTable.setItem(PROBE_CACHE_KEY, JSON.stringify({ savedAt: 1_000, probes: {} }));
+  assert.equal(readProbeCache(wholeTable, CHAINS, 1_000), null);
+
+  const refusing = {
+    getItem: () => {
+      throw new Error("storage is disabled");
+    },
+    setItem: () => {
+      throw new Error("storage is disabled");
+    },
+  };
+  assert.doesNotThrow(() => writeProbeCache(refusing, PROBES, 1_000));
+  assert.equal(readProbeCache(refusing, CHAINS, 1_000), null);
+});
+
+test("a malformed block number leaves the cache unusable instead of throwing", () => {
+  const storage = memoryStorage();
+  storage.setItem(
+    PROBE_CACHE_KEY,
+    JSON.stringify({ savedAt: 1_000, probes: { ethereum: { ok: true, block: "large", ms: 1, via: "primary" }, base: { ok: false } } }),
+  );
+
+  assert.equal(readProbeCache(storage, CHAINS, 1_000), null);
 });
 
 test("cancel without a lookup is harmless", () => {
