@@ -11,11 +11,12 @@ the pre-commit hook, which runs `npm run typecheck` and `npm test` on every
 commit. [Setup](README.md#setup) covers the environment file and how to skip the
 hook when you need to.
 
-The hook refuses a commit whose suite skipped more than the browser test, so it
-wants `php` (with `curl` and `openssl`) on `PATH` or `LWC_PHP` pointing at one;
-otherwise `src/explorer-rpc.test.mjs` skips and the commit stops with the counts
-it saw. That is deliberate: a skip exits 0, so the alternative is committing with
-the proxy checks silently doing nothing.
+The hook refuses a commit whose suite skipped more than the browser test. `php`
+stays optional: with it installed, any proxy skip is refused, and without it the
+hook refuses only when the staged files touch `explorer/rpc.php` or
+`src/explorer-rpc.test.mjs`, warning instead for every other change. Set `LWC_PHP`
+to a php binary with `curl` and `openssl` to run those ten cases locally; CI always
+does.
 
 ## Before you commit
 
