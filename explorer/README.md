@@ -8,6 +8,9 @@ Nothing here holds a key, signs, or sends a transaction. `rpc.php` accepts only
 a fixed list of `eth_*`/`net_version` read methods and forwards them to the
 endpoints in `presets.json`, primary first, then fallback.
 
+The `/scan/` index deployed beside this explorer on the same host is a separate
+app; its tables and restore steps are in [`../docs/scan-index.md`](../docs/scan-index.md).
+
 ## Files
 
 | File | What it is |

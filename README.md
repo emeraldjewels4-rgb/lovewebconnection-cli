@@ -309,7 +309,10 @@ does not exist yet (`--strict-missing` makes that a failure instead), and a
 refusal to merge rather than gate a file other than the one it names. Exit
 codes are 0 for a pass or skip, 1 for a failed gate and 2 for a misconfigured
 hook; `--json` writes one document to stdout in every outcome, with the
-explanation kept on stderr so stdout stays parseable. A stale history makes the
+explanation kept on stderr so stdout stays parseable. The skip is an outcome
+too: its document carries `skipped: true`, the path, the threshold and the same
+`gate` object, so `.gate.passed` reads `true` on a skip and `false` under
+`--strict-missing` whether or not the file exists. A stale history makes the
 failure report list its newest runs with their age, failures and failovers, so
 the rows that are past the bound are visible instead of summarized in one line. The path and threshold
 can come from `LWC_PRESETS_HISTORY`, `LWC_FAIL_UNDER`, `LWC_MAX_AGE` and
@@ -417,7 +420,8 @@ lwc watch --chain xlayer --interval 5
 `LWC_CHAIN` selects the default preset and `--chain` overrides it per command,
 including in a project whose `.env` is pinned to another chain: an explicit
 preset uses its own endpoint and does not inherit a `LWC_CHAIN_ID` or
-`LWC_RPC_URL` configured for a different network. When the two agree, the env
+`LWC_RPC_URL` configured for a different network, whether `.env` names that
+network with `LWC_CHAIN` or `LWC_CHAIN_ID`. When the two agree, the env
 values still win over the preset's defaults — `LWC_RPC_URL` swaps in your
 endpoint (add `LWC_RPC_AUTH` if it needs a bearer token), and `LWC_CHAIN_NAME`
 and `LWC_NATIVE_SYMBOL` relabel output. The credential belongs to that endpoint:
@@ -849,7 +853,9 @@ delay), and error count, so
 `jq -r '[.session, .fastest] | @tsv' compare.ndjson` lists the winner over time.
 Endpoint URLs are recorded as origin and path with query strings, fragments, and
 userinfo removed, and URLs inside error messages are sanitized the same way, so
-an API key in an endpoint URL never reaches the log; `--endpoint-auth` values and
+an API key in an endpoint URL never reaches the log — any path segment that is
+not a route word (`v2`, `rpc`, `jsonrpc`, …) is replaced with `<redacted>`, so a
+short or non-hex key is hidden too, not just a 24-character one; `--endpoint-auth` values and
 auth headers are never written at all. `--log-max-size` (same sizes as `watch`)
 rotates the file to `<log>.1` past the limit and requires `--log`.
 
@@ -1526,9 +1532,10 @@ truncated, so successive runs accumulate and can be read back with any JSON-line
 tool. Every line carries a `session` id, so several runs in one file stay
 separable: group `metrics` and `summary` lines by `session` to compare p50/p95
 latency, block time, and stalls between them. Each `start` line also records the
-sanitised RPC endpoint — origin and path, with query strings and key-like path
-segments removed — so reliability can be attributed to a provider without
-writing an API key into the log.
+sanitised RPC endpoint — origin and path, with query strings removed and every
+path segment that is not a route word (`v2`, `rpc`, …) replaced by `<redacted>` —
+so reliability can be attributed to a provider without writing a key of any
+length into the log.
 
 Pass `--log-max-size` to bound a long-lived file. Before a line would push the
 active file past the limit, it is renamed to `<log>.1` — replacing any older
@@ -1860,6 +1867,16 @@ Requests are limited per client as well: 120 a minute by default, changed with
 times in a minute is blocked for the next minute. Both answer `429` with a
 `retry-after` header and a `code` of `rate-limited` or `too-many-attempts`.
 `GET /` is never limited, so the unlock form stays reachable.
+
+Behind a reverse proxy every request arrives from the proxy's address, so name
+the proxy: `--trusted-proxy <ip>` (repeatable) lets the API read
+`X-Forwarded-For` from that peer only, counting the rightmost hop that is not
+itself a trusted proxy as the client. The header is ignored from every other
+peer, a malformed value falls back to the socket address, and without the flag
+the peer is the client — so a header a caller sends itself can never buy a fresh
+bucket. Have the proxy overwrite the header
+(`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` in nginx) rather
+than pass a client-supplied one through.
 
 The counters survive a restart: they are written to `<pool>.limits.json` beside
 the pool (another location with `--limits-file <path>`), and expired entries are
