@@ -25,7 +25,7 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { EXPLORER_FILES } from "./explorer-files.mjs";
+import { EXPLORER_FILES, formatBytes } from "./explorer-files.mjs";
 
 const SOURCE_DIR = join(import.meta.dirname, "..", "explorer");
 const ARCHIVE = join(import.meta.dirname, "..", "explorer-x10-upload.zip");
@@ -68,11 +68,6 @@ function crc32(data) {
   let crc = 0xffffffff;
   for (const byte of data) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
-}
-
-function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
 /** Reads the deployable files, in list order. */

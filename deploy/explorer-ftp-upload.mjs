@@ -28,7 +28,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 // The zip builder reads the same list, so the two cannot ship different sets.
-import { EXPLORER_FILES as FILES } from "./explorer-files.mjs";
+import { EXPLORER_FILES as FILES, formatBytes } from "./explorer-files.mjs";
 
 const SOURCE_DIR = join(import.meta.dirname, "..", "explorer");
 
@@ -159,12 +159,6 @@ async function planUploads() {
     );
   }
   return files;
-}
-
-function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function printPlan(options, files, total) {
