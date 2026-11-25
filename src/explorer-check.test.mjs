@@ -5,15 +5,17 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 
-// deploy/explorer-check.mjs sends only GETs apart from one same-origin POST to rpc.php, so its nine
+// deploy/explorer-check.mjs sends only GETs apart from one same-origin POST to rpc.php, so its eleven
 // checks can be run against a loopback server: no host, no network egress, nothing written. The page
-// and its scripts are served exactly as the checkout holds them, because an upload that stored CRLF
-// or dropped the final newline is a different file and has to fail.
+// and its four assets are served exactly as the checkout holds them, because an upload that stored
+// CRLF or dropped the final newline is a different file and has to fail.
 const SCRIPT = join(import.meta.dirname, "..", "deploy", "explorer-check.mjs");
 const SOURCE = join(import.meta.dirname, "..", "explorer");
 const PAGE = await readFile(join(SOURCE, "index.html"), "utf8");
 const APP = await readFile(join(SOURCE, "app.js"), "utf8");
 const STATE = await readFile(join(SOURCE, "lookup-state.js"), "utf8");
+const STYLE = await readFile(join(SOURCE, "style.css"), "utf8");
+const PRESETS = await readFile(join(SOURCE, "presets.json"), "utf8");
 // What a file manager upload can leave behind: the same text re-encoded, or minus
 // its final newline. Both are differences the check has to report, not skip.
 const CRLF_PAGE = PAGE.replace(/\n/g, "\r\n");
@@ -31,6 +33,14 @@ function healthyHost() {
     "/explorer/lookup-state.js": {
       body: STATE,
       headers: { "content-type": "text/javascript", "cache-control": "no-cache, must-revalidate" },
+    },
+    "/explorer/style.css": {
+      body: STYLE,
+      headers: { "content-type": "text/css", "cache-control": "no-cache, must-revalidate" },
+    },
+    "/explorer/presets.json": {
+      body: PRESETS,
+      headers: { "content-type": "application/json", "cache-control": "no-cache, must-revalidate" },
     },
     // The page's own call: a same-origin POST with a JSON body. This one answers
     // only when all three hold, which is what the proxy check is meant to prove.
@@ -88,12 +98,12 @@ async function check(table) {
   }
 }
 
-test("a host serving the checkout's files passes all nine checks", async () => {
+test("a host serving the checkout's files passes all eleven checks", async () => {
   const result = await check(healthyHost());
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.match(/^ {2}ok {3}/gm)?.length, 9, result.stdout);
-  assert.match(result.stdout, /9 checks passed/);
+  assert.equal(result.stdout.match(/^ {2}ok {3}/gm)?.length, 11, result.stdout);
+  assert.match(result.stdout, /11 checks passed/);
   assert.doesNotMatch(result.stdout, /FAIL/);
 });
 
@@ -105,7 +115,7 @@ test("a host that stored CRLF fails, and the detail names the line endings", asy
   assert.equal(result.status, 1);
   assert.match(result.stdout, /FAIL \/explorer\/ is explorer\/index\.html/);
   assert.match(result.stdout, /B served, 3362 B in the checkout; line endings are CRLF, the checkout's are LF/);
-  assert.match(result.stderr, /1 of 9 checks failed/);
+  assert.match(result.stderr, /1 of 11 checks failed/);
 });
 
 test("an upload that dropped the final newline fails, and the detail names it", async () => {
@@ -121,7 +131,7 @@ test("an upload that dropped the final newline fails, and the detail names it", 
   assert.match(result.stdout, /FAIL \/explorer\/lookup-state\.js is explorer\/lookup-state\.js/);
   assert.match(result.stdout, /4091 B served, 4092 B in the checkout/);
   assert.match(result.stdout, /the served copy has no final newline/);
-  assert.match(result.stderr, /1 of 9 checks failed/);
+  assert.match(result.stderr, /1 of 11 checks failed/);
 });
 
 test("the directory still landing on the site root's index fails, naming both checks", async () => {
@@ -130,7 +140,7 @@ test("the directory still landing on the site root's index fails, naming both ch
   assert.equal(result.status, 1);
   assert.match(result.stdout, /FAIL \/explorer\/ is explorer\/index\.html/);
   assert.match(result.stdout, /FAIL the page loads app\.js\?v=/);
-  assert.match(result.stderr, /2 of 9 checks failed/);
+  assert.match(result.stderr, /2 of 11 checks failed/);
 });
 
 test("an app.js cached for a year fails the revalidation check", async () => {
@@ -142,7 +152,7 @@ test("an app.js cached for a year fails the revalidation check", async () => {
   assert.equal(result.status, 1);
   assert.match(result.stdout, /FAIL app\.js is revalidated/);
   assert.match(result.stdout, /cache-control: \(none\)/);
-  assert.match(result.stderr, /1 of 9 checks failed/);
+  assert.match(result.stderr, /1 of 11 checks failed/);
 });
 
 test("scripts left behind by an earlier upload fail by name, page or not", async () => {
@@ -164,7 +174,29 @@ test("scripts left behind by an earlier upload fail by name, page or not", async
   assert.match(result.stdout, /FAIL \/explorer\/app\.js is explorer\/app\.js/);
   assert.match(result.stdout, /FAIL \/explorer\/lookup-state\.js is explorer\/lookup-state\.js/);
   assert.doesNotMatch(result.stdout, /FAIL the page loads/);
-  assert.match(result.stderr, /2 of 9 checks failed/);
+  assert.match(result.stderr, /2 of 11 checks failed/);
+});
+
+test("a stale stylesheet or preset list fails by name too", async () => {
+  // Neither file is versioned by a query the page names, so before these checks
+  // a host could restyle the explorer or drop a chain and still pass.
+  const result = await check({
+    ...healthyHost(),
+    "/explorer/style.css": {
+      body: "/* the stylesheet an earlier upload left */\n",
+      headers: { "content-type": "text/css", "cache-control": "no-cache, must-revalidate" },
+    },
+    "/explorer/presets.json": {
+      body: JSON.stringify({ chains: [{ name: "ethereum", id: 1 }] }),
+      headers: { "content-type": "application/json", "cache-control": "no-cache, must-revalidate" },
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /FAIL \/explorer\/style\.css is explorer\/style\.css/);
+  assert.match(result.stdout, /FAIL \/explorer\/presets\.json is explorer\/presets\.json/);
+  assert.doesNotMatch(result.stdout, /FAIL the page loads/);
+  assert.match(result.stderr, /2 of 11 checks failed/);
 });
 
 test("a proxy that refuses the page's own origin fails the proxy check", async () => {
@@ -187,7 +219,7 @@ test("a proxy that refuses the page's own origin fails the proxy check", async (
   assert.equal(result.status, 1);
   assert.match(result.stdout, /FAIL \/explorer\/rpc\.php answers eth_chainId/);
   assert.match(result.stdout, /HTTP 403, .*answers the explorer page/);
-  assert.match(result.stderr, /1 of 9 checks failed/);
+  assert.match(result.stderr, /1 of 11 checks failed/);
 });
 
 test("a base that is not an http URL is a usage error, not a failed check", async () => {

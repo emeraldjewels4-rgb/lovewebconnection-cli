@@ -6,24 +6,25 @@
  *   npm run explorer:check -- --base https://example.com
  *
  * The explorer is uploaded by hand through a host's file manager, so nothing in
- * this repo can see what the host actually serves afterwards. These are the nine
- * things that separate a working deploy from the failure modes this folder has
+ * this repo can see what the host actually serves afterwards. These are the
+ * eleven things that separate a working deploy from the failure modes this folder has
  * already hit: the folder URL answering with its own index rather than the site
  * root's absolute DirectoryIndex, the uploaded page being byte for byte the one
  * in this checkout - line endings and the final newline included, because a file
  * manager that rewrites either has changed the file the browser parses - the
  * page asking for the same app.js version the checkout does, app.js being
- * revalidated rather than cached for the year the parent site sets, app.js and
- * lookup-state.js being the files in this checkout (a script left behind by an
- * earlier upload is otherwise invisible, because the page only names a version),
- * a missing subfolder still being a 404, the site root still being the dashboard,
- * and the proxy answering the page's own call instead of refusing it.
+ * revalidated rather than cached for the year the parent site sets, app.js,
+ * lookup-state.js, style.css and presets.json being the files in this checkout (a
+ * script or asset left behind by an earlier upload is otherwise invisible,
+ * because the page only names a version), a missing subfolder still being a 404,
+ * the site root still being the dashboard, and the proxy answering the page's own
+ * call instead of refusing it.
  *
  * Read-only: it sends GETs with `cache-control: no-cache`, so a proxy cannot
  * hand back the page a previous deploy left, plus one POST - eth_chainId through
  * rpc.php, from this site's own Origin - which reads the chain id and changes
  * nothing. That POST is the only request that reaches a chain endpoint. It writes
- * nothing. Exit status is 0 when all nine pass, 1 when any fails or the host
+ * nothing. Exit status is 0 when all eleven pass, 1 when any fails or the host
  * cannot be reached, and 2 for a usage error.
  */
 import { readFile } from "node:fs/promises";
@@ -33,7 +34,7 @@ import { parseArgs } from "node:util";
 const SOURCE_DIR = join(import.meta.dirname, "..", "explorer");
 const DEFAULT_BASE = "https://fiatgod.x10.mx";
 const TIMEOUT_MS = 20_000;
-const CHECK_COUNT = 9;
+const CHECK_COUNT = 11;
 
 const USAGE = `usage: node deploy/explorer-check.mjs [--base URL]
 
@@ -48,9 +49,12 @@ Checks the deployed explorer: GETs, plus the one POST the page itself makes:
   5  /explorer/app.js is explorer/app.js from this checkout, byte for byte
   6  /explorer/lookup-state.js is explorer/lookup-state.js from this checkout,
      byte for byte
-  7  /explorer/nope/ answers 404
-  8  / still answers 200 with something other than the explorer page
-  9  /explorer/rpc.php answers eth_chainId to this site's own origin`;
+  7  /explorer/style.css is explorer/style.css from this checkout, byte for byte
+  8  /explorer/presets.json is explorer/presets.json from this checkout,
+     byte for byte
+  9  /explorer/nope/ answers 404
+  10 / still answers 200 with something other than the explorer page
+  11 /explorer/rpc.php answers eth_chainId to this site's own origin`;
 
 class UsageError extends Error {}
 
@@ -197,9 +201,11 @@ async function main() {
   }
   // The proxy looks its chain up in the presets, so the check asks about one the
   // checkout actually ships rather than inventing a name the host would refuse.
+  let presetsSource;
   let presets;
   try {
-    presets = JSON.parse(await readFile(join(SOURCE_DIR, "presets.json"), "utf8"));
+    presetsSource = await readFile(join(SOURCE_DIR, "presets.json"), "utf8");
+    presets = JSON.parse(presetsSource);
   } catch (error) {
     throw new UsageError(`explorer/presets.json is unreadable: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -210,9 +216,10 @@ async function main() {
   // The page names only a version, so the host can serve an unchanged page beside
   // scripts from an earlier upload and every other check still passes. These are
   // compared byte for byte with what the host sends.
-  const [appSource, stateSource] = await Promise.all([
+  const [appSource, stateSource, styleSource] = await Promise.all([
     readFile(join(SOURCE_DIR, "app.js"), "utf8"),
     readFile(join(SOURCE_DIR, "lookup-state.js"), "utf8"),
+    readFile(join(SOURCE_DIR, "style.css"), "utf8"),
   ]);
 
   console.log(`checking ${base.href}`);
@@ -257,6 +264,21 @@ async function main() {
     stateMatch.same,
     "/explorer/lookup-state.js is explorer/lookup-state.js",
     stateMatch.detail,
+  );
+
+  // The stylesheet and the preset list decide how the page looks and which chains
+  // it offers, and neither is versioned by a query the page names, so a copy left
+  // behind by an earlier upload is as invisible as a stale script.
+  const styles = await attempt(new URL("explorer/style.css", base));
+  const styleMatch = compareBody(styles.body, styleSource);
+  report(styleMatch.same, "/explorer/style.css is explorer/style.css", styleMatch.detail);
+
+  const presetsFile = await attempt(new URL("explorer/presets.json", base));
+  const presetsMatch = compareBody(presetsFile.body, presetsSource);
+  report(
+    presetsMatch.same,
+    "/explorer/presets.json is explorer/presets.json",
+    presetsMatch.detail,
   );
 
   const missing = await attempt(new URL("explorer/nope/", base));
