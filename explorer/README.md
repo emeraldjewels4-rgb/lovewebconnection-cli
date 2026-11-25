@@ -189,6 +189,20 @@ a browser holding an older copy fetches the new one.
 npm run explorer:check
 ```
 
+It runs eleven checks, in this order:
+
+1. `/explorer/` answers 200.
+2. `/explorer/` is `explorer/index.html` from this checkout, byte for byte.
+3. The page loads the same `app.js?v=` version this checkout names.
+4. `/explorer/app.js` is revalidated, not cached for a year.
+5. `/explorer/app.js` is `explorer/app.js` from this checkout, byte for byte.
+6. `/explorer/lookup-state.js` is `explorer/lookup-state.js` from this checkout, byte for byte.
+7. `/explorer/style.css` is `explorer/style.css` from this checkout, byte for byte.
+8. `/explorer/presets.json` is `explorer/presets.json` from this checkout, byte for byte.
+9. `/explorer/nope/` answers 404.
+10. `/` still answers with the dashboard.
+11. `/explorer/rpc.php` answers `eth_chainId` to this site's own origin.
+
 The check defaults to `https://fiatgod.x10.mx`, so it needs no arguments here;
 pass `-- --base https://<other-domain>` for another host. It reads only, plus
 the one `eth_chainId` POST the page itself makes. Each check prints an `ok`

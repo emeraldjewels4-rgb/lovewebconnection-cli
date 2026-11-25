@@ -16,6 +16,7 @@ const APP = await readFile(join(SOURCE, "app.js"), "utf8");
 const STATE = await readFile(join(SOURCE, "lookup-state.js"), "utf8");
 const STYLE = await readFile(join(SOURCE, "style.css"), "utf8");
 const PRESETS = await readFile(join(SOURCE, "presets.json"), "utf8");
+const README = await readFile(join(SOURCE, "README.md"), "utf8");
 // What a file manager upload can leave behind: the same text re-encoded, or minus
 // its final newline. Both are differences the check has to report, not skip.
 const CRLF_PAGE = PAGE.replace(/\n/g, "\r\n");
@@ -99,6 +100,38 @@ async function check(table) {
     return await runCheck(host.base);
   } finally {
     await host.close();
+  }
+}
+
+/** CHECK_COUNT and the files the script compares, read out of its own source. */
+async function checkFacts() {
+  const source = await readFile(SCRIPT, "utf8");
+  const count = Number(/const CHECK_COUNT = (\d+);/.exec(source)?.[1]);
+  assert.ok(Number.isInteger(count) && count > 0, "CHECK_COUNT is declared in the script");
+  const compared = [...source.matchAll(/join\(SOURCE_DIR, "([^"]+)"\)/g)].map(([, name]) => name);
+  assert.ok(compared.length > 0, "the script reads its files through SOURCE_DIR");
+  return { count, compared };
+}
+
+/**
+ * A numbered list written by hand has to agree with the script it describes: the
+ * numbers run 1 to CHECK_COUNT, and the files it names are exactly the ones the
+ * script compares, so a check inserted without renumbering, an entry dropped, or
+ * a file listed that nothing compares fails here rather than in a deploy.
+ */
+function assertListMatchesChecks(entries, compared, count, where) {
+  assert.deepEqual(
+    entries.map((entry) => entry.number),
+    Array.from({ length: count }, (_, index) => index + 1),
+    `${where} runs 1 to CHECK_COUNT with no gaps or repeats`,
+  );
+
+  const named = entries.flatMap((entry) => entry.text.match(/[\w-]+\.(?:html|js|css|json)\b/g) ?? []);
+  for (const name of named) {
+    assert.ok(compared.includes(name), `${where} names ${name}, which the script compares`);
+  }
+  for (const name of compared) {
+    assert.ok(named.includes(name), `${name} is compared, so ${where} names it`);
   }
 }
 
@@ -229,14 +262,8 @@ test("a proxy that refuses the page's own origin fails the proxy check", async (
 test("the usage list numbers every check once and names only compared files", async () => {
   // The help list is written by hand beside the checks it describes, so a check
   // inserted without renumbering, or one dropped from the list, would otherwise
-  // drift silently. The compared files are read out of the script's own source,
-  // so listing a file it does not compare fails here rather than in a deploy.
-  const source = await readFile(SCRIPT, "utf8");
-  const count = Number(/const CHECK_COUNT = (\d+);/.exec(source)?.[1]);
-  assert.ok(Number.isInteger(count) && count > 0, "CHECK_COUNT is declared in the script");
-
-  const compared = [...source.matchAll(/join\(SOURCE_DIR, "([^"]+)"\)/g)].map(([, name]) => name);
-  assert.ok(compared.length > 0, "the script reads its files through SOURCE_DIR");
+  // drift silently.
+  const { count, compared } = await checkFacts();
 
   const result = await runScript(["--help"]);
   assert.equal(result.status, 0, result.stderr);
@@ -249,18 +276,64 @@ test("the usage list numbers every check once and names only compared files", as
     text,
   }));
 
-  assert.deepEqual(
-    entries.map((entry) => entry.number),
-    Array.from({ length: count }, (_, index) => index + 1),
-    "the usage list runs 1 to CHECK_COUNT with no gaps or repeats",
-  );
+  assertListMatchesChecks(entries, compared, count, "the usage list");
+});
 
-  const named = entries.flatMap((entry) => entry.text.match(/[\w-]+\.(?:html|js|css|json)\b/g) ?? []);
-  for (const name of named) {
-    assert.ok(compared.includes(name), `the usage list names ${name}, which the script compares`);
-  }
-  for (const name of compared) {
-    assert.ok(named.includes(name), `${name} is compared, so the usage list names it`);
+test("the README's check list matches the script too", async () => {
+  // The README numbers the checks by hand as well, and nothing else ties that
+  // list to the code. It lives under step 5 and ends at the next section, so the
+  // numbered cPanel and SSH steps elsewhere in the file are not read as checks.
+  const { count, compared } = await checkFacts();
+
+  const start = README.indexOf("**5. Check what the host now serves.**");
+  assert.notEqual(start, -1, "the README has a step 5 for the check");
+  const end = README.indexOf("\n### ", start);
+  const section = README.slice(start, end === -1 ? undefined : end);
+  const entries = [...section.matchAll(/^(\d+)\. (.+)$/gm)].map(([, number, text]) => ({
+    number: Number(number),
+    text,
+  }));
+
+  assertListMatchesChecks(entries, compared, count, "the README's check list");
+});
+
+test("every check count the README spells out is CHECK_COUNT", async () => {
+  // Beyond the list, the README quotes the total in prose - how many pass, how
+  // many fail, and how many make up the gate - so adding a check to the script
+  // would leave those sentences quoting an old number. Every count is collected,
+  // in digits or in words, and compared.
+  const { count } = await checkFacts();
+  const words = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+  };
+
+  const digits = [
+    ...[...README.matchAll(/(\d+) checks? (?:passed|failed)/g)].map(([text, n]) => ({ text, value: Number(n) })),
+    ...[...README.matchAll(/(\d+) of (\d+) checks/g)].flatMap(([text, ...ns]) =>
+      ns.map((n) => ({ text, value: Number(n) })),
+    ),
+  ];
+  const spelled = [...README.matchAll(/\b([a-z]+) checks\b/gi)]
+    .filter(([, word]) => word.toLowerCase() in words)
+    .map(([text, word]) => ({ text, value: words[word.toLowerCase()] }));
+
+  // If either form of count stopped being found, the test would quietly stop
+  // covering it, so both are required to appear at least once.
+  assert.ok(digits.length >= 2, `the README states a count in digits (${digits.length} found)`);
+  assert.ok(spelled.length >= 1, `the README states a count in words (${spelled.length} found)`);
+  for (const { text, value } of [...digits, ...spelled]) {
+    assert.equal(value, count, `"${text}" says ${value}, the script runs ${count}`);
   }
 });
 
