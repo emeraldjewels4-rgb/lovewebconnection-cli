@@ -756,13 +756,18 @@ test(
           return true;
         })()`,
       );
-      await waitFor(session, `document.getElementById("result").innerText.includes("Block 19,000,000")`);
+      await waitFor(
+        session,
+        `document.getElementById("result").innerText.includes("Block 19,000,000")`,
+        PAGE_READY_MS,
+      );
       assert.match(await session.evaluate<string>("location.search"), /type=block/);
 
       await session.evaluate("history.back()");
       await waitFor(
         session,
         `location.search.includes("type=token") && document.getElementById("result").innerText.includes("USD Coin")`,
+        PAGE_READY_MS,
       );
       assert.equal(await session.evaluate<string>(`document.getElementById("kind").value`), "token");
 
@@ -776,7 +781,11 @@ test(
           return true;
         })()`,
       );
-      await waitFor(session, `document.getElementById("result").innerText.includes("Transaction")`);
+      await waitFor(
+        session,
+        `document.getElementById("result").innerText.includes("Transaction")`,
+        PAGE_READY_MS,
+      );
       const transactionText = await session.evaluate<string>(`document.getElementById("result").innerText`);
       assert.match(transactionText, /Transaction 0x1212/);
       assert.match(transactionText, /succeeded/);
@@ -798,7 +807,7 @@ test(
           return true;
         })()`,
       );
-      await waitFor(session, `document.getElementById("result").innerText.includes("Balance")`);
+      await waitFor(session, `document.getElementById("result").innerText.includes("Balance")`, PAGE_READY_MS);
       const addressText = await session.evaluate<string>(`document.getElementById("result").innerText`);
       assert.match(addressText, /Balance\s+0 ETH/);
       assert.match(addressText, /Nonce\s+1/);
@@ -815,7 +824,11 @@ test(
           return true;
         })()`,
       );
-      await waitFor(session, `document.getElementById("result").innerText.includes("proxy (EIP-1967)")`);
+      await waitFor(
+        session,
+        `document.getElementById("result").innerText.includes("proxy (EIP-1967)")`,
+        PAGE_READY_MS,
+      );
       const contractText = await session.evaluate<string>(`document.getElementById("result").innerText`);
       assert.match(contractText, /Code\s+5 bytes/);
       assert.match(contractText, /Kind\s+proxy \(EIP-1967\)/);
@@ -844,7 +857,7 @@ test(
         })()`,
       );
 
-      await waitFor(session, `document.getElementById("result").innerText.includes("Balance")`);
+      await waitFor(session, `document.getElementById("result").innerText.includes("Balance")`, PAGE_READY_MS);
       await sleep(2000);
       const finalText = await session.evaluate<string>(`document.getElementById("result").innerText`);
       assert.match(finalText, /Balance/, "the address lookup stays on screen");
@@ -871,7 +884,11 @@ test(
           return true;
         })()`,
       );
-      await waitFor(session, `document.getElementById("status").textContent.includes("no block")`);
+      await waitFor(
+        session,
+        `document.getElementById("status").textContent.includes("no block")`,
+        PAGE_READY_MS,
+      );
       assert.match(
         await session.evaluate<string>(`document.getElementById("status").textContent`),
         /no block 0xffffffff on ethereum/,
@@ -890,7 +907,11 @@ test(
           return true;
         })()`,
       );
-      await waitFor(session, `document.getElementById("status").textContent.includes("no contract")`);
+      await waitFor(
+        session,
+        `document.getElementById("status").textContent.includes("no contract")`,
+        PAGE_READY_MS,
+      );
       assert.match(
         await session.evaluate<string>(`document.getElementById("status").textContent`),
         /no contract at 0x33333333/,
