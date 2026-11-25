@@ -297,36 +297,54 @@ test("the README's check list matches the script too", async () => {
   assertListMatchesChecks(entries, compared, count, "the README's check list");
 });
 
+// A spelled-out count has to be turned into a number before it can be compared
+// with the script. A word this table does not know may still be a count - the
+// table just has not been taught it - so it is an error rather than something to
+// skip, which would let "thirteen checks passed" pass unexamined.
+const NUMBER_WORDS = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+};
+
+function collectCheckCounts(readme, where) {
+  const digits = [
+    ...[...readme.matchAll(/(\d+) checks? (?:passed|failed)/g)].map(([text, n]) => ({ text, value: Number(n) })),
+    ...[...readme.matchAll(/(\d+) of (\d+) checks/g)].flatMap(([text, ...ns]) =>
+      ns.map((n) => ({ text, value: Number(n) })),
+    ),
+  ];
+
+  const spelled = [];
+  // "A failure on checks 1, 3 or 4" names individual checks rather than a total,
+  // so a word in front of an enumerated list is prose, not a count.
+  for (const [text, word] of readme.matchAll(/\b([a-z]+) checks\b(?!\s*\d)/gi)) {
+    const value = NUMBER_WORDS[word.toLowerCase()];
+    if (value === undefined) {
+      assert.fail(`${where} has an unrecognised number word before "checks": "${text}" - add it to NUMBER_WORDS`);
+    }
+    spelled.push({ text, value });
+  }
+
+  return { digits, spelled };
+}
+
 test("every check count the README spells out is CHECK_COUNT", async () => {
   // Beyond the list, the README quotes the total in prose - how many pass, how
   // many fail, and how many make up the gate - so adding a check to the script
   // would leave those sentences quoting an old number. Every count is collected,
   // in digits or in words, and compared.
   const { count } = await checkFacts();
-  const words = {
-    one: 1,
-    two: 2,
-    three: 3,
-    four: 4,
-    five: 5,
-    six: 6,
-    seven: 7,
-    eight: 8,
-    nine: 9,
-    ten: 10,
-    eleven: 11,
-    twelve: 12,
-  };
-
-  const digits = [
-    ...[...README.matchAll(/(\d+) checks? (?:passed|failed)/g)].map(([text, n]) => ({ text, value: Number(n) })),
-    ...[...README.matchAll(/(\d+) of (\d+) checks/g)].flatMap(([text, ...ns]) =>
-      ns.map((n) => ({ text, value: Number(n) })),
-    ),
-  ];
-  const spelled = [...README.matchAll(/\b([a-z]+) checks\b/gi)]
-    .filter(([, word]) => word.toLowerCase() in words)
-    .map(([text, word]) => ({ text, value: words[word.toLowerCase()] }));
+  const { digits, spelled } = collectCheckCounts(README, "the README");
 
   // If either form of count stopped being found, the test would quietly stop
   // covering it, so both are required to appear at least once.
@@ -335,6 +353,16 @@ test("every check count the README spells out is CHECK_COUNT", async () => {
   for (const { text, value } of [...digits, ...spelled]) {
     assert.equal(value, count, `"${text}" says ${value}, the script runs ${count}`);
   }
+});
+
+test("a number word the count test does not know fails instead of being skipped", () => {
+  assert.throws(
+    () => collectCheckCounts("It runs thirteen checks, in this order:", "the sample"),
+    /the sample has an unrecognised number word before "checks": "thirteen checks"/,
+  );
+  // Prose that names individual checks is not a total and must not be mistaken
+  // for one, or every such sentence would have to be taught to NUMBER_WORDS.
+  assert.doesNotThrow(() => collectCheckCounts("A failure on checks 1, 3 or 4 is a cache problem.", "the sample"));
 });
 
 test("a base that is not an http URL is a usage error, not a failed check", async () => {
