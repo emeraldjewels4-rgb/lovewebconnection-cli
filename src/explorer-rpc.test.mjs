@@ -17,6 +17,8 @@ const PHP = process.env.LWC_PHP ?? "php";
 const REPO = join(import.meta.dirname, "..");
 const MAX_REQUEST_BYTES = 8192;
 const MAX_RESPONSE_BYTES = 1048576;
+// rpc.php's window, which carries the edge rule's number: sixty a minute.
+const RATE_LIMIT = 60;
 
 function have(binary, args) {
   try {
@@ -274,11 +276,11 @@ test("an answer past the response cap is refused instead of relayed", { skip }, 
   assert.match(await response.text(), new RegExp(`answer over ${MAX_RESPONSE_BYTES} bytes`));
 });
 
-test("a thirty-first call from one address inside the minute is refused with 429", { skip }, async () => {
+test("a sixty-first call from one address inside the minute is refused with 429", { skip }, async () => {
   // Its own server and its own counter directory: the window is per address, every
   // request here arrives from 127.0.0.1, and the calls the other tests make must not
   // decide this one. An unknown chain is the cheapest answer that gets past every
-  // gate, so each of the first thirty is counted before the thirty-first is refused.
+  // gate, so each of the first sixty is counted before the sixty-first is refused.
   const rateDir = join(work, "tmp-rate");
   await mkdir(rateDir, { recursive: true });
   const port = await freePort();
@@ -296,7 +298,7 @@ test("a thirty-first call from one address inside the minute is refused with 429
       body: JSON.stringify(call("eth_chainId")),
     });
 
-    for (let index = 1; index <= 30; index += 1) {
+    for (let index = 1; index <= RATE_LIMIT; index += 1) {
       const response = await send();
       assert.equal(response.status, 400, `call ${index} should reach the chain lookup`);
     }

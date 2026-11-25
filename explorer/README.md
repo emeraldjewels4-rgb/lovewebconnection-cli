@@ -13,9 +13,9 @@ transaction) while still refusing an unbounded answer. Block lookups must ask fo
 those hashes: a full-transaction block is roughly twenty times the size
 (541 KB against 28 KB for the same ethereum block) and the page never asks for
 it, so `eth_getBlockByNumber` with anything but `false` as its second parameter
-is refused. A per-address counter in the PHP — thirty calls a minute, one small
-locked file per address under the temp directory — is a backstop for a forged
-`Origin`, not the plan: the cap on how fast a stranger can spend the quota
+is refused. A per-address counter in the PHP — sixty calls a minute, the edge
+rule's own number, one small locked file per address under the temp directory —
+is a backstop for a forged `Origin`, not the plan: the cap on how fast a stranger can spend the quota
 belongs at the edge — see
 [Rate-limit the proxy at the edge](#rate-limit-the-proxy-at-the-edge).
 
@@ -118,11 +118,11 @@ for `.php`.
 
 ## Rate-limit the proxy at the edge
 
-`rpc.php` counts thirty calls a minute per address, but that counter is a
-backstop: it is per-host state in a temp directory, it starts empty on a new
-worker, and it costs PHP time on every request. The limit itself goes in front
-of the host. On Cloudflare that is one rule, applied before PHP runs: a blocked
-request costs no PHP time and no RPC quota.
+`rpc.php` counts sixty calls a minute per address — the edge rule's own number —
+but that counter is a backstop: it is per-host state in a temp directory, it
+starts empty on a new worker, and it costs PHP time on every request. The limit
+itself goes in front of the host. On Cloudflare that is one rule, applied before
+PHP runs: a blocked request costs no PHP time and no RPC quota.
 
 1. Cloudflare dashboard → the site's zone → **Security → WAF → Rate limiting
    rules → Create rule**.
@@ -135,10 +135,37 @@ request costs no PHP time and no RPC quota.
    second rule on the same path for bursts: 20 requests per 10 seconds.
 5. **Action**: Block.
 
-Why 60: a page load probes all six chains twice, chain id and block number, so
-12 requests, and a lookup costs one to four more. That leaves a reader four page
-loads a minute while capping an abuser at roughly 60 MiB a minute at the 1 MiB
-answer cap. The count is per IP, so an office behind one address shares it.
+Why 60, and what a visitor spends. A page load probes all six presets twice —
+chain id and block number, so 12 requests before the reader asks for anything —
+and each lookup costs:
+
+| Lookup | Calls |
+| --- | --- |
+| Block | 1 |
+| Address | 3 |
+| Transaction | 3 |
+| Contract (code plus the three EIP-1967 slots) | 4 |
+| Token (code plus name, symbol, decimals, totalSupply) | 5 |
+
+A load plus two lookups is 14 to 22 calls, and the 60 leaves room for about nine
+token lookups after a load, or seven after two tabs: a reader works through a few
+lookups a minute while an abuser is capped at roughly 60 MiB a minute at the 1 MiB
+answer cap. At the thirty this started with, a load plus four token lookups was
+already refused. Back and forward re-run a lookup, so it costs the same again.
+
+Two things move that sum:
+
+- **The count is per public address, so it is shared.** Everyone behind one
+  office, campus or carrier-NAT address spends the same 60: two readers loading
+  the page behind one address is 24 calls before either asks for a lookup.
+- **Behind a proxy the count becomes site-wide.** `rpc.php` reads `REMOTE_ADDR`
+  and trusts no forwarding header, which is what stops a forged `Origin` from
+  buying a fresh window; with Cloudflare's proxy switched on, that address is
+  the edge's, so the 60 is one budget for the whole site rather than per
+  visitor and a handful of loads exhaust it. The page answers as plain `Apache`
+  today, with no `cf-ray`; if the proxy is turned on, either keep this counter
+  as a global backstop and let the WAF rule count the visitor's real address, or
+  move the per-visitor count to the edge and leave PHP the Origin gate.
 
 **What a limited visitor sees.** Cloudflare's Block action answers 429 with
 Cloudflare's own HTML page, not JSON, so the page treats it the way it treats any

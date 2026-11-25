@@ -35,7 +35,7 @@ const ERC20 = {
 const DELAYED_BLOCK = "0x121eac0"; // 19,000,000, the block the test looks up
 // The same window explorer/rpc.php counts per address, so a page that made more
 // calls than the real proxy allows inside a minute is refused here too.
-const RATE_LIMIT = 30;
+const RATE_LIMIT = 60;
 const RATE_WINDOW_MS = 60_000;
 // The same ten methods explorer/rpc.php allows. The stub refuses everything else so a
 // page change that asks for a shape the real proxy rejects fails here as well.
@@ -320,7 +320,7 @@ function fromExplorer(request: IncomingMessage): boolean {
 }
 
 /**
- * The thirty-calls-a-minute counter explorer/rpc.php keeps per address, held in
+ * The sixty-calls-a-minute counter explorer/rpc.php keeps per address, held in
  * memory rather than one locked temp file. It counts every POST that reaches it,
  * refusals included, because the real proxy counts before it looks at the body.
  */
@@ -672,7 +672,7 @@ test(
 
       // The page counts against the same window, so the probe gets one of its own,
       // and the page goes on in a fresh one afterwards — what waiting out the minute
-      // would give it. Everything the page does after this is inside the thirty.
+      // would give it. Everything the page does after this is inside the sixty.
       await fetch(`${base}/__reset-rate`, { method: "POST" });
       const limiter = await session.evaluate<{
         allowed: number[];
@@ -704,9 +704,9 @@ test(
       assert.deepEqual(
         limiter.allowed.filter((status) => status !== 200),
         [],
-        "the first thirty calls in the window are answered",
+        "the first sixty calls in the window are answered",
       );
-      assert.equal(limiter.status, 429, "the thirty-first call in the window is refused");
+      assert.equal(limiter.status, 429, "the sixty-first call in the window is refused");
       assert.ok(limiter.retryAfter > 0, "the refusal carries Retry-After");
       assert.match(limiter.message, /too many calls from this address/);
       await fetch(`${base}/__reset-rate`, { method: "POST" });
