@@ -41,6 +41,7 @@ async function start(
   corsOrigins: string[] = [],
   accessKey: string | null = null,
   rateLimitPerMinute?: number,
+  trustedProxies: string[] = [],
 ): Promise<Running> {
   const directory = mkdtempSync(join(tmpdir(), "lwc-api-"));
   const path = join(directory, "pool.json");
@@ -52,6 +53,7 @@ async function start(
     port: 0,
     corsOrigins,
     accessKey,
+    trustedProxies,
     ...(rateLimitPerMinute === undefined ? {} : { rateLimitPerMinute }),
   });
   const info = await server.listen();
@@ -63,8 +65,9 @@ async function withServer(
   corsOrigins: string[] = [],
   accessKey: string | null = null,
   rateLimitPerMinute?: number,
+  trustedProxies: string[] = [],
 ): Promise<void> {
-  const ctx = await start(corsOrigins, accessKey, rateLimitPerMinute);
+  const ctx = await start(corsOrigins, accessKey, rateLimitPerMinute, trustedProxies);
   try {
     await run(ctx);
   } finally {
@@ -304,6 +307,89 @@ test("blocks a client that keeps guessing the key", async () => {
   }, [], "right-key-1234");
 });
 
+test("a forwarded header a client sends itself buys no extra limiter bucket", async () => {
+  // No --trusted-proxy: the socket peer is the client, whatever the header says.
+  await withServer(async ({ base }) => {
+    const hit = (ip: string) => fetch(`${base}/health`, { headers: { "x-forwarded-for": ip } });
+
+    assert.equal((await hit("1.1.1.1")).status, 200);
+    assert.equal((await hit("1.1.1.1")).status, 200);
+
+    const spoofed = await hit("9.9.9.9");
+    assert.equal(spoofed.status, 429, "a claimed address does not reset the bucket");
+    assert.equal(((await spoofed.json()) as any).code, "rate-limited");
+  }, [], null, 2);
+});
+
+test("a trusted proxy's forwarded address separates clients", async () => {
+  await withServer(
+    async ({ base }) => {
+      const hit = (xff: string) =>
+        fetch(`${base}/health`, { headers: { "x-forwarded-for": xff } });
+
+      assert.equal((await hit("1.1.1.1")).status, 200);
+      assert.equal((await hit("1.1.1.1")).status, 429, "one client's quota is spent");
+      assert.equal((await hit("2.2.2.2")).status, 200, "another client still has one");
+      assert.equal(
+        (await hit("9.9.9.9, 1.1.1.1")).status,
+        429,
+        "a prepended hop cannot escape the real client's bucket",
+      );
+    },
+    [],
+    null,
+    1,
+    ["127.0.0.1"],
+  );
+});
+
+test("a key lockout follows the forwarded client, not the proxy", async () => {
+  await withServer(
+    async ({ base }) => {
+      const attempt = (ip: string, key: string) =>
+        fetch(`${base}/health`, { headers: { "x-forwarded-for": ip, "x-market-key": key } });
+
+      for (let index = 0; index < 10; index += 1) {
+        assert.equal((await attempt("3.3.3.3", "wrong-key-0000")).status, 401);
+      }
+
+      const blocked = await attempt("3.3.3.3", "right-key-1234");
+      assert.equal(blocked.status, 429);
+      assert.equal(((await blocked.json()) as any).code, "too-many-attempts");
+
+      assert.equal(
+        (await attempt("4.4.4.4", "right-key-1234")).status,
+        200,
+        "a neighbour behind the same proxy keeps working",
+      );
+    },
+    [],
+    "right-key-1234",
+    undefined,
+    ["127.0.0.1"],
+  );
+});
+
+test("a malformed forwarded header falls back to the shared peer bucket", async () => {
+  await withServer(
+    async ({ base }) => {
+      const hit = (xff: string) =>
+        fetch(`${base}/health`, { headers: { "x-forwarded-for": xff } });
+
+      assert.equal((await hit("not-an-ip")).status, 200);
+      assert.equal(
+        (await hit("also-bad:port:junk")).status,
+        429,
+        "a malformed header counts against the peer bucket, so junk mints nothing",
+      );
+    },
+    [],
+    null,
+    1,
+    ["127.0.0.1"],
+  );
+});
+
 test("close stops the listener", async () => {
   const ctx = await start();
   assert.equal(ctx.server.listening, true);
@@ -329,7 +415,29 @@ test("serve flags parse and are validated", () => {
       accessKey: null,
       rateLimitPerMinute: 120,
       limitsPath: "p.json.limits.json",
+      trustedProxies: [],
     });
+    assert.deepEqual(
+      parseMarketArgs([
+        "--pool",
+        "p.json",
+        "--serve",
+        "--trusted-proxy",
+        "127.0.0.1",
+        "--trusted-proxy",
+        "::1",
+      ]).serve?.trustedProxies,
+      ["127.0.0.1", "::1"],
+    );
+    assert.throws(
+      () =>
+        parseMarketArgs(["--pool", "p.json", "--serve", "--trusted-proxy", "nginx.local"]),
+      /--trusted-proxy must be an IP address/,
+    );
+    assert.throws(
+      () => parseMarketArgs(["--pool", "p.json", "--trusted-proxy", "127.0.0.1"]),
+      /only apply with --serve/,
+    );
     assert.equal(
       parseMarketArgs(["--pool", "p.json", "--serve", "--rate-limit", "30"]).serve
         ?.rateLimitPerMinute,

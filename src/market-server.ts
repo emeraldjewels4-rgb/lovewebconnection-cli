@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { isIP } from "node:net";
 
 import { MARKET_PAGE_HTML } from "./market-page.ts";
 import {
@@ -36,6 +37,24 @@ const MAX_AUTH_FAILURES = 10;
 const FAILURE_WINDOW_MS = 60_000;
 /** The window the per-client request limit is measured over. */
 const RATE_WINDOW_MS = 60_000;
+
+/**
+ * Canonical form of a socket or forwarded address, for bucket keys: brackets,
+ * zone ids and port suffixes drop, and an IPv4-mapped IPv6 address is unwrapped
+ * so `::ffff:127.0.0.1` and `127.0.0.1` share one bucket. Null when it is not an
+ * IP at all.
+ */
+function canonicalAddress(value: string): string | null {
+  let text = value.trim().toLowerCase();
+  if (text.startsWith("[") && text.endsWith("]")) text = text.slice(1, -1);
+  const zone = text.indexOf("%");
+  if (zone !== -1) text = text.slice(0, zone);
+  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(text)) {
+    text = text.slice(0, text.lastIndexOf(":"));
+  }
+  if (text.startsWith("::ffff:") && isIP(text.slice(7)) === 4) text = text.slice(7);
+  return isIP(text) === 0 ? null : text;
+}
 
 /**
  * Compare two secrets without leaking where they differ, or how long they are:
@@ -148,6 +167,8 @@ export class MarketServer {
   private readonly options: MarketServeOptions;
   /** Where counters are kept between runs; null keeps them in memory only. */
   private readonly limitsPath: string | null;
+  /** Peers whose `X-Forwarded-For` may name the client; empty trusts nobody. */
+  private readonly trustedProxies: Set<string>;
   private limitsWriteFailed = false;
   private server: Server | null = null;
 
@@ -168,6 +189,11 @@ export class MarketServer {
     this.options = options;
     this.limitsPath =
       options.limitsPath === undefined ? `${poolPath}.limits.json` : options.limitsPath;
+    this.trustedProxies = new Set(
+      (options.trustedProxies ?? [])
+        .map((entry) => canonicalAddress(entry))
+        .filter((entry): entry is string => entry !== null),
+    );
     this.loadLimits();
   }
 
@@ -219,6 +245,46 @@ export class MarketServer {
   /** True while the listener is accepting requests. */
   get listening(): boolean {
     return this.server !== null;
+  }
+
+  /** True when the connection itself comes from a configured proxy. */
+  private isTrustedProxy(address: string): boolean {
+    const canonical = canonicalAddress(address);
+    return canonical !== null && this.trustedProxies.has(canonical);
+  }
+
+  /**
+   * The address the rate limiter and key lockout count against. `X-Forwarded-For`
+   * is read only when the socket peer is a configured proxy, and then the
+   * rightmost hop that is not another trusted proxy is the client, so a caller
+   * cannot prepend an address to escape the bucket it is already in. A malformed
+   * header falls back to the peer: fail-closed, so a proxy setup nobody
+   * configured shares one bucket instead of handing out unlimited ones. Without
+   * `--trusted-proxy` the peer address is the client, and a header a client
+   * sends itself changes nothing.
+   */
+  private clientAddress(request: IncomingMessage): string {
+    const peer = request.socket.remoteAddress ?? "unknown";
+    if (!this.isTrustedProxy(peer)) return peer;
+
+    const header = request.headers["x-forwarded-for"];
+    const raw = Array.isArray(header) ? header.join(",") : header;
+    if (typeof raw !== "string" || raw.trim() === "") return peer;
+
+    const hops: string[] = [];
+    for (const part of raw.split(",")) {
+      if (part.trim() === "") continue;
+      const canonical = canonicalAddress(part);
+      if (canonical === null) return peer;
+      hops.push(canonical);
+    }
+    if (hops.length === 0) return peer;
+
+    for (let index = hops.length - 1; index >= 0; index -= 1) {
+      const hop = hops[index]!;
+      if (!this.trustedProxies.has(hop)) return hop;
+    }
+    return peer;
   }
 
   /** Requests and failed key attempts per client. */
@@ -429,7 +495,7 @@ export class MarketServer {
     // The page shell carries no pool data, so it stays reachable: it is where a
     // browser enters the key. Every route that reads or moves the pool needs it.
     const publicRoute = path === "/" || path === "/favicon.ico";
-    const address = request.socket.remoteAddress ?? "unknown";
+    const address = this.clientAddress(request);
 
     if (!publicRoute) {
       const blocked = this.blockedSeconds(address);

@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { dirname } from "node:path";
 
 import { formatUnits, parseUnits } from "viem";
@@ -838,6 +839,12 @@ export interface MarketServeOptions {
   corsOrigins: string[];
   /** Key every pool route requires; null leaves the API open. */
   accessKey: string | null;
+  /**
+   * Socket addresses of reverse proxies whose `X-Forwarded-For` is believed.
+   * Empty means the header is ignored, so every request is its own client and a
+   * spoofed header cannot buy a fresh bucket.
+   */
+  trustedProxies?: string[];
   /** Requests per minute one client may make; 0 turns the limiter off. */
   rateLimitPerMinute?: number;
   /**
@@ -889,6 +896,14 @@ function wholeNumber(raw: string, flag: string, max: number): number {
   return value;
 }
 
+function parseTrustedProxy(raw: string): string {
+  const value = raw.trim().replace(/^\[|\]$/g, "");
+  if (isIP(value) === 0) {
+    throw new MarketArgError(`--trusted-proxy must be an IP address, got "${raw}".`);
+  }
+  return value;
+}
+
 function parseCorsOrigin(raw: string): string {
   const value = raw.trim();
   if (value === "*") return "*";
@@ -909,6 +924,7 @@ export function parseMarketArgs(argv: string[]): MarketArgs {
   let accessKey: string | null = null;
   let rateLimit: number | null = null;
   let limitsPath: string | null = null;
+  const trustedProxies: string[] = [];
 
   let price: string | null = null;
   let baseSymbol: string | null = null;
@@ -960,6 +976,9 @@ export function parseMarketArgs(argv: string[]): MarketArgs {
         break;
       case "--limits-file":
         limitsPath = take();
+        break;
+      case "--trusted-proxy":
+        trustedProxies.push(parseTrustedProxy(take()));
         break;
       case "--pool":
         poolPath = take();
@@ -1077,10 +1096,11 @@ export function parseMarketArgs(argv: string[]): MarketArgs {
       corsOrigins.length > 0 ||
       accessKey !== null ||
       rateLimit !== null ||
-      limitsPath !== null)
+      limitsPath !== null ||
+      trustedProxies.length > 0)
   ) {
     throw new MarketArgError(
-      "--port, --host, --cors, --api-key, --rate-limit and --limits-file only apply with --serve.",
+      "--port, --host, --cors, --api-key, --rate-limit, --limits-file and --trusted-proxy only apply with --serve.",
     );
   }
 
@@ -1107,6 +1127,7 @@ export function parseMarketArgs(argv: string[]): MarketArgs {
           accessKey,
           rateLimitPerMinute: rateLimit ?? DEFAULT_MARKET_RATE_LIMIT,
           limitsPath: limitsPath ?? (poolPath === null ? null : `${poolPath}.limits.json`),
+          trustedProxies,
         }
       : null,
   };
