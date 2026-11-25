@@ -18,9 +18,9 @@ const REPO = join(import.meta.dirname, "..");
 const MAX_REQUEST_BYTES = 8192;
 const MAX_RESPONSE_BYTES = 1048576;
 
-function havePhp() {
+function have(binary, args) {
   try {
-    return spawnSync(PHP, ["-v"], { stdio: "ignore" }).status === 0;
+    return spawnSync(binary, args, { stdio: "ignore" }).status === 0;
   } catch {
     return false;
   }
@@ -52,7 +52,13 @@ async function waitFor(url) {
   throw new Error(`no answer from ${url}`);
 }
 
-const skip = havePhp() ? false : "php is not installed; set LWC_PHP to a php binary";
+// Both tools are needed: php runs rpc.php, openssl makes the fixture certificate that
+// the success and cap cases need, because the proxy only talks to https endpoints.
+const skip = !have(PHP, ["-v"])
+  ? "php is not installed; set LWC_PHP to a php binary"
+  : !have("openssl", ["version"])
+    ? "openssl is not installed, so the fixture certificate cannot be made"
+    : false;
 let work;
 let php;
 let upstream;
@@ -69,7 +75,9 @@ before(async () => {
       "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
     { stdio: "ignore" },
   );
-  assert.equal(made.status, 0, "openssl could not make the fixture certificate");
+  if (made.status !== 0) {
+    throw new Error("openssl is present but could not make the fixture certificate");
+  }
 
   // The fixture answers every method with a small result, except eth_getCode, which
   // answers past the proxy's cap so the abort path can be exercised, and
