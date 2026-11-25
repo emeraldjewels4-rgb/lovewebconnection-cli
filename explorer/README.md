@@ -101,6 +101,8 @@ host rejects `DirectoryIndex` in `.htaccess` when `AllowOverride` leaves out
 `Indexes`) and re-upload the file with **Show Hidden Files** on. When
 `.htaccess` is the only file that changed, uploading it alone is enough.
 
+The next section uploads the same seven files over SSH from a shell instead.
+
 `deploy/explorer-ftp-upload.mjs` can push the same seven files with curl when a
 host has an FTPS login and a shell. It is optional: the file manager steps above
 are the documented route, and the script's own `--help` says so. It requires
@@ -115,6 +117,88 @@ If the page says `presets.json` cannot be loaded, confirm it was uploaded as
 `application/json` and not HTML. If `rpc.php` downloads instead of running,
 select **PHP 8.x** for the account and make sure the `php` handler is enabled
 for `.php`.
+
+### Upload over SSH instead
+
+The file manager route needs a browser. This route needs a shell and the
+`freebuff-x10` key, uploads the same seven files to the same place, and changes
+nothing else on the host — no cPanel setting, no DNS, no PHP version.
+
+| | |
+| --- | --- |
+| Host | `fiatgod.x10.mx` |
+| User | `fiatgod` |
+| Port | `22` |
+| Key | `freebuff-x10`, private half at `~/.ssh/id_ed25519_x10` |
+| Fingerprint | `SHA256:oSJQYKmK2C9XaxXYYzHCLwTIyoJSs2Ej73gLfvQnfiA` |
+| Target | `public_html/explorer/` in the account's home directory |
+
+The host offers `publickey,password` on port 22; 21 and 990 are closed, so the
+FTPS script above cannot reach it. The private key is never committed and never
+pasted anywhere: it stays at `~/.ssh/id_ed25519_x10`, readable only by its owner.
+
+**1. Authorize the key in cPanel.** cPanel → **SSH Access** → **Manage SSH
+Keys** → **Import Key**: paste the public half (`~/.ssh/id_ed25519_x10.pub`,
+the line starting `ssh-ed25519` and ending `freebuff-x10`) and import it. Then,
+still under **Manage SSH Keys**, open the key's **Manage** view and
+**Authorize** it. Authorizing is the step that is easy to miss: an imported but
+unauthorized key authenticates nothing and the host answers
+`Permission denied (publickey)`. This step only registers a public key; it
+uploads no file.
+
+**2. Confirm the key on disk is the one above.** A different fingerprint is a
+different key: stop and import the public half that belongs to it.
+
+```sh
+chmod 600 ~/.ssh/id_ed25519_x10
+ssh-keygen -lf ~/.ssh/id_ed25519_x10
+# 256 SHA256:oSJQYKmK2C9XaxXYYzHCLwTIyoJSs2Ej73gLfvQnfiA freebuff-x10 (ED25519)
+```
+
+**3. Sign in once**, confirming the host key the first time it is offered:
+
+```sh
+ssh -i ~/.ssh/id_ed25519_x10 -o IdentitiesOnly=yes -p 22 fiatgod@fiatgod.x10.mx
+exit
+```
+
+`IdentitiesOnly=yes` keeps the agent's other keys out of the attempt, so the
+key named above is the one tried. A `Permission denied (publickey)` here means
+step 1 was not finished, not that the upload command is wrong.
+
+**4. Send the seven files.** Run from the repository root, after
+`npm run explorer:data` if `CHAIN_PRESETS` changed:
+
+```sh
+cd explorer
+scp -i ~/.ssh/id_ed25519_x10 -o IdentitiesOnly=yes -P 22 \
+  index.html style.css app.js lookup-state.js presets.json rpc.php .htaccess \
+  fiatgod@fiatgod.x10.mx:public_html/explorer/
+cd ..
+```
+
+`.htaccess` is named explicitly because a shell glob such as `explorer/*` skips
+it, and without it `/explorer/` answers with the dashboard instead of the page.
+Uploading again overwrites the same seven files; there is no partial state to
+clean up, and `app.js` and `lookup-state.js` are imported with `?v=` queries, so
+a browser holding an older copy fetches the new one.
+
+**5. Check what the host now serves.**
+
+```sh
+npm run explorer:check
+```
+
+The check defaults to `https://fiatgod.x10.mx`, so it needs no arguments here;
+pass `-- --base https://<other-domain>` for another host. It reads only, plus
+the one `eth_chainId` POST the page itself makes. Each check prints an `ok`
+line, and the run ends with `7 checks passed` and exit status 0: the upload
+landed, `/explorer/app.js` is revalidated rather than cached for a year, and the
+proxy answers this site's own origin. A failure prints `FAIL` against that check
+and ends with `N of 7 checks failed`, naming them, with exit status 1; exit
+status 2 is a usage error. A failure on checks 1, 3 or 4 when the files are
+demonstrably on disk is usually a stale browser or edge cache rather than a bad
+upload.
 
 ## Rate-limit the proxy at the edge
 
