@@ -6,19 +6,22 @@
  *   npm run explorer:check -- --base https://example.com
  *
  * The explorer is uploaded by hand through a host's file manager, so nothing in
- * this repo can see what the host actually serves afterwards. These are the six
+ * this repo can see what the host actually serves afterwards. These are the seven
  * things that separate a working deploy from the failure modes this folder has
  * already hit: the folder URL answering with its own index rather than the site
  * root's absolute DirectoryIndex, the uploaded page being the one in this
  * checkout (a host may normalise line endings, so the comparison ignores CR), the
  * page asking for the same app.js version the checkout does, app.js being
  * revalidated rather than cached for the year the parent site sets, a missing
- * subfolder still being a 404, and the site root still being the dashboard.
+ * subfolder still being a 404, the site root still being the dashboard, and the
+ * proxy answering the page's own call instead of refusing it.
  *
  * Read-only: it sends GETs with `cache-control: no-cache`, so a proxy cannot
- * hand back the page a previous deploy left, and it writes nothing. Exit status
- * is 0 when all six pass, 1 when any fails or the host cannot be reached, and 2
- * for a usage error.
+ * hand back the page a previous deploy left, plus one POST - eth_chainId through
+ * rpc.php, from this site's own Origin - which reads the chain id and changes
+ * nothing. That POST is the only request that reaches a chain endpoint. It writes
+ * nothing. Exit status is 0 when all seven pass, 1 when any fails or the host
+ * cannot be reached, and 2 for a usage error.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -27,20 +30,21 @@ import { parseArgs } from "node:util";
 const SOURCE_DIR = join(import.meta.dirname, "..", "explorer");
 const DEFAULT_BASE = "https://fiatgod.x10.mx";
 const TIMEOUT_MS = 20_000;
-const CHECK_COUNT = 6;
+const CHECK_COUNT = 7;
 
 const USAGE = `usage: node deploy/explorer-check.mjs [--base URL]
 
   --base URL   site root to check (default ${DEFAULT_BASE})
   -h, --help   this text
 
-Checks the deployed explorer over GET only:
+Checks the deployed explorer: GETs, plus the one POST the page itself makes:
   1  /explorer/ answers 200
   2  /explorer/ is explorer/index.html from this checkout, CR ignored
   3  the page asks for the same app.js version the checkout does
   4  /explorer/app.js is revalidated, not cached for a year
   5  /explorer/nope/ answers 404
-  6  / still answers 200 with something other than the explorer page`;
+  6  / still answers 200 with something other than the explorer page
+  7  /explorer/rpc.php answers eth_chainId to this site's own origin`;
 
 class UsageError extends Error {}
 
@@ -98,6 +102,35 @@ async function get(url) {
   };
 }
 
+/**
+ * The one request this script does not send as a GET. rpc.php refuses anything but
+ * a POST before it looks at the caller, and past that it answers only the page it
+ * is served with, so the Origin is this site's own - the header every browser
+ * attaches to the page's own call - and the body is eth_chainId, the call the
+ * page makes first, which reads the chain id and changes nothing.
+ */
+async function postJson(url, body, origin) {
+  const response = await fetch(url, {
+    method: "POST",
+    cache: "no-store",
+    redirect: "follow",
+    headers: { "content-type": "application/json", origin, "cache-control": "no-cache" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  return {
+    status: response.status,
+    headers: response.headers,
+    body: await response.text(),
+  };
+}
+
+/** A refusal's body on one line, short enough for the detail column. */
+function shortBody(text) {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > 120 ? `${line.slice(0, 120)}...` : line;
+}
+
 async function main() {
   const options = parseOptions(process.argv.slice(2));
   if (options.help) {
@@ -111,6 +144,18 @@ async function main() {
   if (!version) {
     throw new UsageError("explorer/index.html does not name an app.js version; nothing to check against");
   }
+  // The proxy looks its chain up in the presets, so the check asks about one the
+  // checkout actually ships rather than inventing a name the host would refuse.
+  let presets;
+  try {
+    presets = JSON.parse(await readFile(join(SOURCE_DIR, "presets.json"), "utf8"));
+  } catch (error) {
+    throw new UsageError(`explorer/presets.json is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const chain = Array.isArray(presets?.chains) ? presets.chains[0]?.name : undefined;
+  if (typeof chain !== "string" || chain === "") {
+    throw new UsageError("explorer/presets.json names no chain to ask the proxy about");
+  }
 
   console.log(`checking ${base.href}`);
   const failed = [];
@@ -118,9 +163,9 @@ async function main() {
     console.log(`  ${ok ? "ok  " : "FAIL"} ${name}${detail ? `  (${detail})` : ""}`);
     if (!ok) failed.push(name);
   };
-  const attempt = async (url) => {
+  const attempt = async (url, send = get) => {
     try {
-      return await get(url);
+      return await send(url);
     } catch (error) {
       throw new Error(`could not fetch ${url.href}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -156,6 +201,31 @@ async function main() {
     root.status === 200 && withoutCr(root.body) !== expected,
     "/ still answers with the dashboard",
     `HTTP ${root.status}, ${Buffer.byteLength(withoutCr(root.body))} B`,
+  );
+
+  // The page falls back to calling public endpoints itself when rpc.php does not
+  // answer, which looks like a working explorer while every lookup has left this
+  // host's proxy behind. A refusal is therefore a failed deploy, not a detail.
+  const ask = (url) =>
+    postJson(url, { jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }, base.origin);
+  const answer = await attempt(
+    new URL(`explorer/rpc.php?chain=${encodeURIComponent(chain)}`, base),
+    ask,
+  );
+  let relayed = null;
+  try {
+    relayed = JSON.parse(answer.body);
+  } catch {
+    // a body that is not JSON is reported below, with the status it came with
+  }
+  const chainId = typeof relayed?.result === "string" ? relayed.result : "";
+  const answered = answer.status === 200 && /^0x[0-9a-f]+$/i.test(chainId);
+  report(
+    answered,
+    "/explorer/rpc.php answers eth_chainId to this page's origin",
+    answered
+      ? `HTTP ${answer.status}, chain ${chain} reads ${chainId}`
+      : `HTTP ${answer.status}${answer.body ? `, ${shortBody(answer.body)}` : ""}`,
   );
 
   if (failed.length > 0) {

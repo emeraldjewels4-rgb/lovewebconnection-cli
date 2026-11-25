@@ -33,6 +33,10 @@ const ERC20 = {
   totalSupply: "0x18160ddd",
 };
 const DELAYED_BLOCK = "0x121eac0"; // 19,000,000, the block the test looks up
+// The same window explorer/rpc.php counts per address, so a page that made more
+// calls than the real proxy allows inside a minute is refused here too.
+const RATE_LIMIT = 30;
+const RATE_WINDOW_MS = 60_000;
 // The same ten methods explorer/rpc.php allows. The stub refuses everything else so a
 // page change that asks for a shape the real proxy rejects fails here as well.
 const READ_METHODS = new Set([
@@ -293,6 +297,56 @@ function rpcError(message: string): unknown {
   return { jsonrpc: "2.0", id: null, error: { code: -32600, message } };
 }
 
+/**
+ * The gate explorer/rpc.php applies before anything else but the method: the
+ * caller must be the page the proxy is served with, so an Origin naming this host
+ * (port included) or a `Sec-Fetch-Site: same-origin` signal. A script sends
+ * neither and is refused.
+ */
+function fromExplorer(request: IncomingMessage): boolean {
+  const host = String(request.headers.host ?? "").toLowerCase();
+  if (host === "") return false;
+  const origin = String(request.headers.origin ?? "");
+  if (origin !== "") {
+    try {
+      // URL.host carries the port when the origin names one, as the real proxy's
+      // host-and-port comparison does.
+      return new URL(origin).host.toLowerCase() === host;
+    } catch {
+      return false;
+    }
+  }
+  return request.headers["sec-fetch-site"] === "same-origin";
+}
+
+/**
+ * The thirty-calls-a-minute counter explorer/rpc.php keeps per address, held in
+ * memory rather than one locked temp file. It counts every POST that reaches it,
+ * refusals included, because the real proxy counts before it looks at the body.
+ */
+function rateLimited(
+  counters: Map<string, { start: number; count: number }>,
+  request: IncomingMessage,
+): { limited: boolean; retryAfter: number } {
+  const address = request.socket.remoteAddress ?? "";
+  if (address === "") return { limited: false, retryAfter: 0 };
+  const now = Date.now();
+  const state = counters.get(address) ?? { start: now, count: 0 };
+  if (now - state.start >= RATE_WINDOW_MS) {
+    state.start = now;
+    state.count = 0;
+  }
+  if (state.count >= RATE_LIMIT) {
+    return {
+      limited: true,
+      retryAfter: Math.max(1, Math.ceil((state.start + RATE_WINDOW_MS - now) / 1000)),
+    };
+  }
+  state.count += 1;
+  counters.set(address, state);
+  return { limited: false, retryAfter: 0 };
+}
+
 function stopBrowser(child: ChildProcess): void {
   if (!child.pid) return;
   if (process.platform === "win32") {
@@ -420,15 +474,49 @@ test(
       files.set(route, { body: await readFile(join(explorerDir, name)), type });
     }
 
+    // One window per address, as rpc.php has one file per address.
+    const rateCounters = new Map<string, { start: number; count: number }>();
+
     const server = createServer(async (request, response) => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (url.pathname === "/__stats") {
         sendJson(response, stats);
         return;
       }
+      if (url.pathname === "/__reset-rate") {
+        // A test control, not part of the proxy: the test runs a minute's worth of
+        // lookups in seconds, so it clears the window where a visitor would have
+        // waited the minute out.
+        rateCounters.clear();
+        sendJson(response, { ok: true });
+        return;
+      }
       if (url.pathname === "/rpc.php") {
         if (request.method !== "POST") {
           sendJson(response, rpcError("use POST"), 405);
+          return;
+        }
+        // Ordered as the real proxy orders them, so the stub's 403 is reachable
+        // only for a caller that would reach the real one's 403 as well, and the
+        // counter sees the same calls the real one counts.
+        if (!fromExplorer(request)) {
+          sendJson(
+            response,
+            rpcError("this proxy answers the explorer page it is served with, not other callers"),
+            403,
+          );
+          return;
+        }
+        const allowance = rateLimited(rateCounters, request);
+        if (allowance.limited) {
+          response.setHeader("retry-after", String(allowance.retryAfter));
+          sendJson(
+            response,
+            rpcError(
+              `too many calls from this address; try again in ${allowance.retryAfter} seconds`,
+            ),
+            429,
+          );
           return;
         }
         if (!String(request.headers["content-type"] ?? "").includes("application/json")) {
@@ -570,6 +658,58 @@ test(
       assert.match(refusalMessages, /application\/json/);
       assert.match(refusalMessages, /read-only set/);
       assert.match(refusalMessages, /second param must be false/);
+
+      // The origin gate cannot be probed from the page: a browser attaches Origin
+      // (and Sec-Fetch-Site) to its own POSTs and forbids a script from setting
+      // either, so the caller that gets 403 has to be one from outside the page.
+      const outside = await fetch(`${base}/rpc.php?chain=ethereum`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+      });
+      assert.equal(outside.status, 403, "the stub must refuse a caller that is not the page");
+      assert.match(await outside.text(), /answers the explorer page it is served with/);
+
+      // The page counts against the same window, so the probe gets one of its own,
+      // and the page goes on in a fresh one afterwards — what waiting out the minute
+      // would give it. Everything the page does after this is inside the thirty.
+      await fetch(`${base}/__reset-rate`, { method: "POST" });
+      const limiter = await session.evaluate<{
+        allowed: number[];
+        status: number;
+        retryAfter: number;
+        message: string;
+      }>(`
+        (async () => {
+          const send = () =>
+            fetch("rpc.php?chain=ethereum", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+            });
+          const allowed = [];
+          for (let index = 1; index <= ${RATE_LIMIT}; index += 1) {
+            allowed.push((await send()).status);
+          }
+          const refused = await send();
+          const body = await refused.json();
+          return {
+            allowed,
+            status: refused.status,
+            retryAfter: Number(refused.headers.get("retry-after")),
+            message: body.error?.message ?? "",
+          };
+        })()
+      `);
+      assert.deepEqual(
+        limiter.allowed.filter((status) => status !== 200),
+        [],
+        "the first thirty calls in the window are answered",
+      );
+      assert.equal(limiter.status, 429, "the thirty-first call in the window is refused");
+      assert.ok(limiter.retryAfter > 0, "the refusal carries Retry-After");
+      assert.match(limiter.message, /too many calls from this address/);
+      await fetch(`${base}/__reset-rate`, { method: "POST" });
       stage("stub refusals checked");
 
       await session.evaluate(
