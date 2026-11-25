@@ -293,6 +293,28 @@ function rpcError(message: string): unknown {
   return { jsonrpc: "2.0", id: null, error: { code: -32600, message } };
 }
 
+/**
+ * The gate explorer/rpc.php applies before anything else but the method: the
+ * caller must be the page the proxy is served with, so an Origin naming this host
+ * (port included) or a `Sec-Fetch-Site: same-origin` signal. A script sends
+ * neither and is refused.
+ */
+function fromExplorer(request: IncomingMessage): boolean {
+  const host = String(request.headers.host ?? "").toLowerCase();
+  if (host === "") return false;
+  const origin = String(request.headers.origin ?? "");
+  if (origin !== "") {
+    try {
+      // URL.host carries the port when the origin names one, as the real proxy's
+      // host-and-port comparison does.
+      return new URL(origin).host.toLowerCase() === host;
+    } catch {
+      return false;
+    }
+  }
+  return request.headers["sec-fetch-site"] === "same-origin";
+}
+
 function stopBrowser(child: ChildProcess): void {
   if (!child.pid) return;
   if (process.platform === "win32") {
@@ -429,6 +451,16 @@ test(
       if (url.pathname === "/rpc.php") {
         if (request.method !== "POST") {
           sendJson(response, rpcError("use POST"), 405);
+          return;
+        }
+        // Ordered as the real proxy orders them, so the stub's 403 is reachable
+        // only for a caller that would reach the real one's 403 as well.
+        if (!fromExplorer(request)) {
+          sendJson(
+            response,
+            rpcError("this proxy answers the explorer page it is served with, not other callers"),
+            403,
+          );
           return;
         }
         if (!String(request.headers["content-type"] ?? "").includes("application/json")) {
@@ -570,6 +602,17 @@ test(
       assert.match(refusalMessages, /application\/json/);
       assert.match(refusalMessages, /read-only set/);
       assert.match(refusalMessages, /second param must be false/);
+
+      // The origin gate cannot be probed from the page: a browser attaches Origin
+      // (and Sec-Fetch-Site) to its own POSTs and forbids a script from setting
+      // either, so the caller that gets 403 has to be one from outside the page.
+      const outside = await fetch(`${base}/rpc.php?chain=ethereum`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+      });
+      assert.equal(outside.status, 403, "the stub must refuse a caller that is not the page");
+      assert.match(await outside.text(), /answers the explorer page it is served with/);
       stage("stub refusals checked");
 
       await session.evaluate(
