@@ -15,6 +15,7 @@ declare(strict_types=1);
  * down, because `eth_getLogs` is token-gated on this endpoint.
  *
  *   GET /scan/api/status                      what the index has, if anything
+ *   GET /scan/api/schema                      create the tables and name them
  *   GET /scan/api/address?address=0x…&limit=25 one address's indexed history
  *   GET /scan/api/ingest?key=…                one cron-sized bite of new blocks
  *   php api.php ingest                        the same, from a cron job
@@ -683,7 +684,7 @@ if ($which === '') {
     answer(200, [
         'ok' => true,
         'configured' => $configured,
-        'routes' => ['status', 'stream', 'address?address=0x…&limit=25', 'tokens?creator=0x…&limit=25', 'ingest?key=…'],
+        'routes' => ['status', 'schema', 'stream', 'address?address=0x…&limit=25', 'tokens?creator=0x…&limit=25', 'ingest?key=…'],
     ]);
 }
 
@@ -700,6 +701,24 @@ try {
     $db = database($config);
 } catch (Throwable $error) {
     answer(503, ['ok' => false, 'configured' => true, 'error' => $error->getMessage()]);
+}
+
+if ($which === 'schema') {
+    // Nothing this route does is new: `database()` already ran `schema()` before it
+    // returned, so every route creates the tables on a fresh database. This one says
+    // so, and names what is there, without an ingest or a block read behind it. It is
+    // also where a missing CREATE grant fails on its own line, instead of inside the
+    // first status query.
+    $tables = $db->query(
+        'SELECT TABLE_NAME FROM information_schema.TABLES'
+        . ' WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME'
+    )->fetchAll(PDO::FETCH_COLUMN);
+    answer(200, [
+        'ok' => true,
+        'configured' => true,
+        'database' => (string) $config['db']['name'],
+        'tables' => $tables,
+    ]);
 }
 
 if ($which === 'status') {

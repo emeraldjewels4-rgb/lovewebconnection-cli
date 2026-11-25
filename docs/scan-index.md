@@ -14,6 +14,10 @@ is a constant there rather than a guess from the RPC.
 have something in the repository to disagree with: if `api.php` changes on the host and this copy is
 not refreshed, the digest stops matching and this document is describing code that is not running.
 
+One deliberate exception: the copy here also carries the `r=schema` route, added on 2026-11-26 and
+**not yet deployed**, so the digest above still names the host's file. Deploy it and refresh both
+numbers together rather than leaving a second definition of "current".
+
 `config.php` is deliberately absent. It is the one file that holds the database password, it exists
 only on the host, and it is written by hand from `config.sample.php` — a copy here would be a
 credential in version control, which is the shape of mistake this directory exists to avoid.
@@ -100,7 +104,8 @@ A restore is the only path that brings the history back. Everything below rebuil
    do this.
 3. **Write no SQL.** Do not create the tables by hand. `database()` runs `schema()` on the first
    connection, so the seven tables appear on their own; hand-made tables would become a second
-   definition that drifts from `api.php`.
+   definition that drifts from `api.php`. `/scan/api.php?r=schema` names them once that has
+   happened, so a fresh database can be checked before the first ingest runs.
 4. Trigger one run, either by waiting for the five-minute cron or by calling
    `/scan/api.php?r=ingest&key=<cron_key>` once, taking `cron_key` from `config.php` in File Manager.
 5. Confirm with `/scan/api.php?r=status`: `chainId 137`, `lastBlock` at or near the Polygon head,
