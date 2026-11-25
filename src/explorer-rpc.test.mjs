@@ -16,7 +16,7 @@ import { after, before, test } from "node:test";
 const PHP = process.env.LWC_PHP ?? "php";
 const REPO = join(import.meta.dirname, "..");
 const MAX_REQUEST_BYTES = 8192;
-const MAX_RESPONSE_BYTES = 262144;
+const MAX_RESPONSE_BYTES = 1048576;
 
 function havePhp() {
   try {
@@ -72,7 +72,10 @@ before(async () => {
   assert.equal(made.status, 0, "openssl could not make the fixture certificate");
 
   // The fixture answers every method with a small result, except eth_getCode, which
-  // answers past the proxy's cap so the abort path can be exercised.
+  // answers past the proxy's cap so the abort path can be exercised, and
+  // eth_getBlockByNumber, which answers the hash-list shape app.js asks for at the
+  // size of a busy L2 block: thousands of hashes, well past the old 256 KiB cap and
+  // comfortably inside the current one.
   upstream = createHttpsServer(
     { key: await readFile(key), cert: await readFile(cert) },
     (request, response) => {
@@ -85,9 +88,16 @@ before(async () => {
         } catch {
           // a body this fixture cannot read is answered as if it were small
         }
-        const result = method === "eth_getCode" ? `0x${"ab".repeat(300 * 1024)}` : "0x1";
+        const hashes = Array.from({ length: 5000 }, (_, index) =>
+          `0x${index.toString(16).padStart(64, "0")}`,
+        );
+        const body = method === "eth_getCode"
+          ? { jsonrpc: "2.0", id: 1, result: `0x${"ab".repeat(700 * 1024)}` }
+          : method === "eth_getBlockByNumber"
+            ? { jsonrpc: "2.0", id: 1, result: { number: "0x1", transactions: hashes } }
+            : { jsonrpc: "2.0", id: 1, result: "0x1" };
         response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result }));
+        response.end(JSON.stringify(body));
       });
     },
   );
@@ -191,6 +201,18 @@ test("a same-origin request is answered by the primary endpoint", { skip }, asyn
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-lwc-via"), "primary");
   assert.deepEqual(await response.json(), { jsonrpc: "2.0", id: 1, result: "0x1" });
+});
+
+test("a block whose hash list is past the old cap still relays whole", { skip }, async () => {
+  // 5,000 hashes is roughly 350 KB: bigger than the 256 KiB cap this started with,
+  // which would have broken the block view on a busy chain, and smaller than a
+  // real eth_getBlockByNumber [number, false] answer for thousands of transactions.
+  const response = await post(call("eth_getBlockByNumber", ["latest", false]));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.result.transactions.length, 5000);
+  assert.ok(Buffer.byteLength(JSON.stringify(body)) > 262144, "the fixture must exceed the old cap");
 });
 
 test("an answer past the response cap is refused instead of relayed", { skip }, async () => {

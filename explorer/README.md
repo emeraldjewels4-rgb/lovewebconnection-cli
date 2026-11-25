@@ -8,7 +8,8 @@ Nothing here holds a key, signs, or sends a transaction. `rpc.php` accepts only
 the ten read methods the page itself calls, only as `POST` with
 `application/json`, and only from its own origin, then forwards them to the
 endpoints in `presets.json`, primary first, then fallback. Bodies are capped at
-8 KiB and answers at 256 KiB. There is no per-IP limit in the PHP: shared
+8 KiB and answers at 1 MiB, which clears a block's hash list (about 80 bytes a
+transaction) while still refusing an unbounded answer. There is no per-IP limit in the PHP: shared
 hosting has no counter to keep, so if the quota is ever abused the fix is a
 Cloudflare rate limit on that path.
 

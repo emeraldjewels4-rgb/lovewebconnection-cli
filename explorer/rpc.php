@@ -19,8 +19,12 @@
  *    body is read, so a large post cannot be buffered.
  *  - Only the ten read methods app.js calls. Nothing here can sign or send a
  *    transaction, and the range-hungry calls the page never makes are absent.
- *  - The upstream answer is capped at 256 KiB and the transfer is aborted past
- *    that, so one request cannot drag a full block through shared hosting.
+ *  - The upstream answer is capped at 1 MiB and the transfer is aborted past
+ *    that, so one request cannot drag an arbitrarily large answer through shared
+ *    hosting. The cap has to clear a block: app.js asks eth_getBlockByNumber for
+ *    the hash list, not full transactions, and a hash-list block measured at
+ *    about 80 bytes per transaction, so an ordinary block is tens of kilobytes
+ *    and a busy L2 block with thousands of hashes is a few hundred.
  *
  * There is no per-IP throttle: a request counter needs shared state that this
  * file does not have, and the edge is the right place for it. explorer/README.md
@@ -49,7 +53,7 @@ const READ_METHODS = [
 const MAX_REQUEST_BYTES = 8192;
 
 /** The largest upstream answer relayed, in bytes; the transfer is cut past this. */
-const MAX_RESPONSE_BYTES = 262144;
+const MAX_RESPONSE_BYTES = 1048576;
 
 function fail(int $status, string $message): void
 {
