@@ -1972,10 +1972,19 @@ found.
 CI runs that file in its own step under `timeout 180`, after the rest of the
 suite has run with `LWC_SKIP_BROWSER=1`. A stuck browser therefore fails the
 browser step in three minutes with its log instead of holding the parallel suite
-open until the job timeout, and the suite step fails unless exactly that one test
-is skipped, so another silently skipped test still turns the workflow red. The
-test prints `[explorer-browser]` stage markers and exits at 150s if it stalls;
-those markers are where to look when the step fails.
+open until the job timeout. Both steps check their summary counts instead of
+trusting the exit status, because a test that skips itself still exits 0:
+
+- the suite step fails unless the run ends at exactly `ℹ skipped 1` — the
+  browser file, with everything else running. `src/explorer-rpc.test.mjs` also
+  skips itself when `php` or `openssl` is missing, which is why this is an exact
+  line and not a substring: `skipped 11` contains `skipped 1`.
+- the browser step fails unless its own log shows `ℹ pass 1` and
+  `ℹ skipped 0`, so a runner whose Chrome cannot start turns red instead of
+  green-and-empty.
+
+The test prints `[explorer-browser]` stage markers and exits at 150s if it
+stalls; those markers are where to look when the step fails.
 
 Run it locally with the rest of the suite, or on its own with a named browser:
 
@@ -2000,13 +2009,15 @@ git push origin main v0.2.1
 ```
 
 The tag must match `package.json`, or the workflow stops before publishing. It
-then runs the typecheck, the offline suite and the build, and publishes with
-`npm publish --access public`; provenance is generated automatically because the
-publish is authenticated by OIDC. The npm side trusts only this repository and
-this workflow filename, configured under the package's **Settings → Trusted
-Publisher**, so renaming the workflow or moving the repository requires updating
-that connection. A granular token can still publish manually, but a release no
-longer needs one.
+then runs the typecheck, the offline suite and the build. That suite runs with
+`LWC_SKIP_BROWSER=1` and is held to the same `ℹ skipped 1`, so a runner
+without `php` fails the release rather than shipping with the proxy tests
+skipped. It publishes with `npm publish --access public`; provenance is
+generated automatically because the publish is authenticated by OIDC. The npm
+side trusts only this repository and this workflow filename, configured under
+the package's **Settings → Trusted Publisher**, so renaming the workflow or
+moving the repository requires updating that connection. A granular token can
+still publish manually, but a release no longer needs one.
 
 ## Next step
 
