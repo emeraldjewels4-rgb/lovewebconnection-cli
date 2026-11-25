@@ -8,15 +8,11 @@ is a constant there rather than a guess from the RPC.
 
 ## The code this describes
 
-`docs/scan/` holds the deployed files, taken from the host byte for byte on 2026-11-25:
-`api.php` (`sha256 414f5fcb299e7633d976b7a6baa7c19a15a224be00a288e60538e8f23efa5e2b`),
+`docs/scan/` holds the deployed files, `api.php` last deployed from this copy on 2026-11-26 at
+`sha256 7b88df073e167b5bff9878246e068346f8bbd19d7ab2de360386358bff65224a`, beside
 `config.sample.php` and `tuning.php`. They are here so the table list and the `ingest()` quote below
 have something in the repository to disagree with: if `api.php` changes on the host and this copy is
 not refreshed, the digest stops matching and this document is describing code that is not running.
-
-One deliberate exception: the copy here also carries the `r=schema` route, added on 2026-11-26 and
-**not yet deployed**, so the digest above still names the host's file. Deploy it and refresh both
-numbers together rather than leaving a second definition of "current".
 
 `config.php` is deliberately absent. It is the one file that holds the database password, it exists
 only on the host, and it is written by hand from `config.sample.php` — a copy here would be a
