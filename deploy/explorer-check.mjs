@@ -9,8 +9,9 @@
  * this repo can see what the host actually serves afterwards. These are the nine
  * things that separate a working deploy from the failure modes this folder has
  * already hit: the folder URL answering with its own index rather than the site
- * root's absolute DirectoryIndex, the uploaded page being the one in this
- * checkout (a host may normalise line endings, so the comparison ignores CR), the
+ * root's absolute DirectoryIndex, the uploaded page being byte for byte the one
+ * in this checkout - line endings and the final newline included, because a file
+ * manager that rewrites either has changed the file the browser parses - the
  * page asking for the same app.js version the checkout does, app.js being
  * revalidated rather than cached for the year the parent site sets, app.js and
  * lookup-state.js being the files in this checkout (a script left behind by an
@@ -41,11 +42,12 @@ const USAGE = `usage: node deploy/explorer-check.mjs [--base URL]
 
 Checks the deployed explorer: GETs, plus the one POST the page itself makes:
   1  /explorer/ answers 200
-  2  /explorer/ is explorer/index.html from this checkout, CR ignored
+  2  /explorer/ is explorer/index.html from this checkout, byte for byte
   3  the page asks for the same app.js version the checkout does
   4  /explorer/app.js is revalidated, not cached for a year
-  5  /explorer/app.js is explorer/app.js from this checkout, CR ignored
-  6  /explorer/lookup-state.js is explorer/lookup-state.js from this checkout
+  5  /explorer/app.js is explorer/app.js from this checkout, byte for byte
+  6  /explorer/lookup-state.js is explorer/lookup-state.js from this checkout,
+     byte for byte
   7  /explorer/nope/ answers 404
   8  / still answers 200 with something other than the explorer page
   9  /explorer/rpc.php answers eth_chainId to this site's own origin`;
@@ -86,7 +88,7 @@ function parseOptions(argv) {
   return { base };
 }
 
-/** A host may store CRLF; the page itself is checked line by line, not byte by byte. */
+/** Only so the site root's dashboard is told apart from the explorer page. */
 function withoutCr(text) {
   return text.replace(/\r\n?/g, "\n");
 }
@@ -134,6 +136,46 @@ function sizeDetail(served, expected) {
   return `${Buffer.byteLength(served)} B served, ${Buffer.byteLength(expected)} B in the checkout`;
 }
 
+/** How a body ends its lines, so a detail can say which difference it found. */
+function lineEndings(text) {
+  const crlf = text.includes("\r\n");
+  if (crlf) return /(^|[^\r])\n/.test(text) ? "mixed CRLF and LF" : "CRLF";
+  if (text.includes("\r")) return "CR";
+  return "LF";
+}
+
+/**
+ * Byte-for-byte comparison of a served body with the checkout's copy.
+ *
+ * Sizes alone cannot tell a stale copy from a re-encoded one, and a difference
+ * the check waved through would be invisible in a browser: a file manager that
+ * stored CRLF, or an upload that dropped the final newline, changes the file
+ * that is parsed just as much as an older revision does, so it fails the same
+ * way - and the detail says which one it is.
+ */
+function compareBody(served, expected) {
+  if (served === expected) return { same: true, detail: sizeDetail(served, expected) };
+
+  const notes = [];
+  const servedText = withoutCr(served);
+  const expectedText = withoutCr(expected);
+  if (servedText !== served || expectedText !== expected) {
+    notes.push(`line endings are ${lineEndings(served)}, the checkout's are ${lineEndings(expected)}`);
+  }
+  if (servedText !== expectedText) {
+    if (servedText.replace(/\n$/, "") === expectedText.replace(/\n$/, "")) {
+      notes.push(
+        servedText.length > expectedText.length
+          ? "the served copy ends with an extra newline"
+          : "the served copy has no final newline",
+      );
+    } else {
+      notes.push("the copy itself differs");
+    }
+  }
+  return { same: false, detail: `${sizeDetail(served, expected)}; ${notes.join(" and ")}` };
+}
+
 /** A refusal's body on one line, short enough for the detail column. */
 function shortBody(text) {
   const line = text.replace(/\s+/g, " ").trim();
@@ -167,7 +209,7 @@ async function main() {
   }
   // The page names only a version, so the host can serve an unchanged page beside
   // scripts from an earlier upload and every other check still passes. These are
-  // compared with what the host sends, CR ignored for the same reason as the page.
+  // compared byte for byte with what the host sends.
   const [appSource, stateSource] = await Promise.all([
     readFile(join(SOURCE_DIR, "app.js"), "utf8"),
     readFile(join(SOURCE_DIR, "lookup-state.js"), "utf8"),
@@ -189,9 +231,8 @@ async function main() {
 
   const folder = await attempt(new URL("explorer/", base));
   report(folder.status === 200, "/explorer/ answers 200", `HTTP ${folder.status}`);
-  const served = withoutCr(folder.body);
-  const expected = withoutCr(page);
-  report(served === expected, "/explorer/ is explorer/index.html", sizeDetail(served, expected));
+  const pageMatch = compareBody(folder.body, page);
+  report(pageMatch.same, "/explorer/ is explorer/index.html", pageMatch.detail);
   report(
     folder.body.includes(`app.js?v=${version}`),
     `the page loads app.js?v=${version}`,
@@ -207,31 +248,26 @@ async function main() {
 
   // A script left behind by an earlier upload breaks lookups in ways the page
   // cannot report, and until now only showed up as a mismatch on index.html.
-  const servedAsset = withoutCr(asset.body);
-  const checkoutAsset = withoutCr(appSource);
-  report(
-    servedAsset === checkoutAsset,
-    "/explorer/app.js is explorer/app.js",
-    sizeDetail(servedAsset, checkoutAsset),
-  );
+  const appMatch = compareBody(asset.body, appSource);
+  report(appMatch.same, "/explorer/app.js is explorer/app.js", appMatch.detail);
 
   const helpers = await attempt(new URL("explorer/lookup-state.js", base));
-  const servedHelpers = withoutCr(helpers.body);
-  const checkoutHelpers = withoutCr(stateSource);
+  const stateMatch = compareBody(helpers.body, stateSource);
   report(
-    servedHelpers === checkoutHelpers,
+    stateMatch.same,
     "/explorer/lookup-state.js is explorer/lookup-state.js",
-    sizeDetail(servedHelpers, checkoutHelpers),
+    stateMatch.detail,
   );
 
   const missing = await attempt(new URL("explorer/nope/", base));
   report(missing.status === 404, "/explorer/nope/ answers 404", `HTTP ${missing.status}`);
 
   const root = await attempt(base);
+  const rootBody = withoutCr(root.body);
   report(
-    root.status === 200 && withoutCr(root.body) !== expected,
+    root.status === 200 && rootBody !== withoutCr(page),
     "/ still answers with the dashboard",
-    `HTTP ${root.status}, ${Buffer.byteLength(withoutCr(root.body))} B`,
+    `HTTP ${root.status}, ${Buffer.byteLength(rootBody)} B`,
   );
 
   // The page falls back to calling public endpoints itself when rpc.php does not

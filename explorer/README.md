@@ -193,17 +193,105 @@ The check defaults to `https://fiatgod.x10.mx`, so it needs no arguments here;
 pass `-- --base https://<other-domain>` for another host. It reads only, plus
 the one `eth_chainId` POST the page itself makes. Each check prints an `ok`
 line, and the run ends with `9 checks passed` and exit status 0: the upload
-landed, `index.html`, `app.js` and `lookup-state.js` are the files in this
-checkout (CR ignored, since an upload can store CRLF), `/explorer/app.js` is
-revalidated rather than cached for a year, and the proxy answers this site's own
-origin. `app.js` and `lookup-state.js` are compared byte for byte because the
-page names only a version: a host can serve the checkout's page beside scripts
-from an earlier upload and every other check still passes. A failure prints
+landed, `index.html`, `app.js` and `lookup-state.js` are byte for byte the files
+in this checkout, `/explorer/app.js` is revalidated rather than cached for a
+year, and the proxy answers this site's own origin. Byte for byte includes the
+line endings and the final newline, because a file manager that stores CRLF or
+drops the last newline has uploaded a different file even when the text reads
+the same; the detail column names which of those it found. The scripts are
+compared rather than only named because the page carries just a version query: a
+host can serve the checkout's page beside scripts from an earlier upload and
+every other check still passes. A failure prints
 `FAIL` against that check and ends with `N of 9 checks failed`, naming them, with
 exit status 1; exit status 2 is a usage error. A failure on checks 1, 3 or 4 when
 the files are demonstrably on disk is usually a stale browser or edge cache
 rather than a bad upload; a failure on 2, 5 or 6 means the upload is not the
 build in the checkout.
+
+### When only some of the files are behind
+
+A deploy can land part of the batch: the page current and a script not, or the
+other way round. The check names what is behind — a failure on 2, 5 or 6 is one
+of the three files it compares byte for byte, and the detail says how far off it
+is. To see the whole batch before touching the host, compare sizes, because a
+page can fail at an identical size:
+
+```sh
+for f in index.html app.js lookup-state.js; do
+  printf '%-16s host %6s B   local %6s B\n' "$f" \
+    "$(curl -s "https://fiatgod.x10.mx/explorer/$f" | wc -c)" "$(wc -c < "explorer/$f")"
+done
+```
+
+Read the pairs:
+
+| What you see | What it means |
+| --- | --- |
+| the two sizes differ | the host holds a different revision |
+| the sizes match but check 2 fails | same length, different text — the `app.js?v=` query is the usual case |
+| a check quotes `line endings are CRLF` | the upload was re-encoded on the way up, a file manager rather than `scp` |
+| a check quotes `has no final newline` | the copy is one byte short of the checkout's |
+
+Upload only the files that are behind, in this order — helpers, then the script
+that imports them, then the page that names the script's version:
+
+```sh
+cd explorer
+scp -i ~/.ssh/id_ed25519_x10 -o IdentitiesOnly=yes -P 22 \
+  lookup-state.js app.js index.html \
+  fiatgod@fiatgod.x10.mx:public_html/explorer/
+cd ..
+```
+
+Leave out any of the three that already matched; the order is what matters.
+Each file lands on its own, so sending the page last means its `?v=` query never
+points at a script that has not arrived yet, and a browser that reloads mid
+upload still gets a consistent pair. `scp` copies bytes as they are on disk,
+which is what the check requires: no CRLF conversion, and the final newline
+kept. A file manager is what re-encodes them.
+
+Then verify, in this order. First the bytes: each host size must equal the local
+size exactly, never merely resemble it.
+
+```sh
+for f in index.html app.js lookup-state.js; do
+  printf '%-16s host %6s B   local %6s B\n' "$f" \
+    "$(curl -s "https://fiatgod.x10.mx/explorer/$f" | wc -c)" "$(wc -c < "explorer/$f")"
+done
+```
+
+Second the line endings, which a size alone can hide. Zero CR bytes on every
+file means the host kept LF; the size comparison above is what proves the final
+newline survived.
+
+```sh
+for f in index.html app.js lookup-state.js; do
+  printf '%-16s CR bytes on host: %s\n' "$f" \
+    "$(curl -s "https://fiatgod.x10.mx/explorer/$f" | tr -cd '\r' | wc -c)"
+done
+```
+
+Third, the page's version token, which must be the one this checkout names — the
+two lines below have to print the same thing:
+
+```sh
+curl -s https://fiatgod.x10.mx/explorer/ | grep -o 'app\.js?v=[0-9]*'
+grep -o 'app\.js?v=[0-9]*' explorer/index.html
+```
+
+Fourth and last, the acceptance gate — the nine checks, not the three:
+
+```sh
+npm run explorer:check
+# 9 checks passed
+```
+
+Exit status 0 and `9 checks passed` means the deploy is done; that run also
+re-checks the revalidation header, the 404, the dashboard and the proxy, so a
+file outside this batch that broke shows up here. A remaining failure on 2, 5 or
+6 quoting `line endings are CRLF` or `has no final newline` means the bytes were
+rewritten on the way up: re-send that file over `scp` after confirming the local
+copy is LF (`file explorer/app.js`), rather than editing the host copy.
 
 ## Rate-limit the proxy at the edge
 

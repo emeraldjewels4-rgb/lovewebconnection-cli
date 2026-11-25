@@ -7,27 +7,29 @@ import { test } from "node:test";
 
 // deploy/explorer-check.mjs sends only GETs apart from one same-origin POST to rpc.php, so its nine
 // checks can be run against a loopback server: no host, no network egress, nothing written. The page
-// and its scripts are served with CRLF on purpose, because a file manager upload can store them that
-// way and the check is meant to ignore that difference.
+// and its scripts are served exactly as the checkout holds them, because an upload that stored CRLF
+// or dropped the final newline is a different file and has to fail.
 const SCRIPT = join(import.meta.dirname, "..", "deploy", "explorer-check.mjs");
 const SOURCE = join(import.meta.dirname, "..", "explorer");
 const PAGE = await readFile(join(SOURCE, "index.html"), "utf8");
+const APP = await readFile(join(SOURCE, "app.js"), "utf8");
+const STATE = await readFile(join(SOURCE, "lookup-state.js"), "utf8");
+// What a file manager upload can leave behind: the same text re-encoded, or minus
+// its final newline. Both are differences the check has to report, not skip.
 const CRLF_PAGE = PAGE.replace(/\n/g, "\r\n");
-const CRLF_APP = (await readFile(join(SOURCE, "app.js"), "utf8")).replace(/\n/g, "\r\n");
-const CRLF_STATE = (await readFile(join(SOURCE, "lookup-state.js"), "utf8")).replace(/\n/g, "\r\n");
 const DASHBOARD = "<!doctype html><title>dashboard</title>";
 
 /** The healthy host: the page, its script, the dashboard, and a 404 for anything else. */
 function healthyHost() {
   return {
     "/": { body: DASHBOARD },
-    "/explorer/": { body: CRLF_PAGE },
+    "/explorer/": { body: PAGE },
     "/explorer/app.js": {
-      body: CRLF_APP,
+      body: APP,
       headers: { "content-type": "text/javascript", "cache-control": "no-cache, must-revalidate" },
     },
     "/explorer/lookup-state.js": {
-      body: CRLF_STATE,
+      body: STATE,
       headers: { "content-type": "text/javascript", "cache-control": "no-cache, must-revalidate" },
     },
     // The page's own call: a same-origin POST with a JSON body. This one answers
@@ -86,13 +88,40 @@ async function check(table) {
   }
 }
 
-test("a host serving the checkout's page passes all nine checks, CRLF and all", async () => {
+test("a host serving the checkout's files passes all nine checks", async () => {
   const result = await check(healthyHost());
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.match(/^ {2}ok {3}/gm)?.length, 9, result.stdout);
   assert.match(result.stdout, /9 checks passed/);
   assert.doesNotMatch(result.stdout, /FAIL/);
+});
+
+test("a host that stored CRLF fails, and the detail names the line endings", async () => {
+  // The failure the check used to wave through: the text is the checkout's, so
+  // every size matches, and only the bytes a browser parses are different.
+  const result = await check({ ...healthyHost(), "/explorer/": { body: CRLF_PAGE } });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /FAIL \/explorer\/ is explorer\/index\.html/);
+  assert.match(result.stdout, /B served, 3362 B in the checkout; line endings are CRLF, the checkout's are LF/);
+  assert.match(result.stderr, /1 of 9 checks failed/);
+});
+
+test("an upload that dropped the final newline fails, and the detail names it", async () => {
+  const result = await check({
+    ...healthyHost(),
+    "/explorer/lookup-state.js": {
+      body: STATE.replace(/\n$/, ""),
+      headers: { "content-type": "text/javascript", "cache-control": "no-cache, must-revalidate" },
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /FAIL \/explorer\/lookup-state\.js is explorer\/lookup-state\.js/);
+  assert.match(result.stdout, /4091 B served, 4092 B in the checkout/);
+  assert.match(result.stdout, /the served copy has no final newline/);
+  assert.match(result.stderr, /1 of 9 checks failed/);
 });
 
 test("the directory still landing on the site root's index fails, naming both checks", async () => {
@@ -107,7 +136,7 @@ test("the directory still landing on the site root's index fails, naming both ch
 test("an app.js cached for a year fails the revalidation check", async () => {
   const result = await check({
     ...healthyHost(),
-    "/explorer/app.js": { body: CRLF_APP, headers: { "content-type": "text/javascript" } },
+    "/explorer/app.js": { body: APP, headers: { "content-type": "text/javascript" } },
   });
 
   assert.equal(result.status, 1);
