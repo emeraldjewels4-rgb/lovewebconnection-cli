@@ -14,6 +14,9 @@ endpoint, prove the connection is live, and build on the same client.
 It holds **no private keys, signs nothing, and sends no transactions**. It reads
 chain state and refuses to talk to an endpoint that reports the wrong chain id.
 
+The Polygon scan index behind `/scan/` — its seven tables, the forward-only limit on what it can
+rebuild, and how to restore it — is documented in [`docs/scan-index.md`](docs/scan-index.md).
+
 ## Install
 
 ```bash
