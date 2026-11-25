@@ -112,16 +112,10 @@ Until the database exists, every database-backed route answers `503` with
 ## Backups
 
 `bin/back-up-db.sh` on the account dumps every database nightly with `mysqldump --single-transaction`,
-checks each file with `gzip -t` and a `sha256`, keeps 14 days plus 6 monthly copies, and prunes inside
-the same run. `bin/` is only where it is installed: the script and its credential helper are tracked in
-`ops/`, next to this document's repository, so the back-up can be rebuilt from a checkout — see
-`ops/README.md`. A rehearsal against a throwaway database is:
+checks each file with `gzip -t`, keeps 14 days and prunes inside the same run. `bin/` is only where it
+is installed: the script is tracked in `ops/` in this repository, so the back-up can be rebuilt from a
+checkout — `ops/README.md` has the install, the cron line and the quarterly restore test.
 
-```sh
-RESTORE_DB=<account>_restore_test /bin/bash /home/<account>/bin/back-up-db.sh \
-  --restore-check /home/<account>/backups/mysql/<date>/<account>_scan-<date>.sql.gz
-```
-
-It imports the dump, compares the table list with the live database exactly, prints approximate row
-totals for both, and drops the restored tables unless `--keep` is given. `TABLE_ROWS` is approximate for
-InnoDB, so the totals catch an import that stopped early rather than proving every row.
+A dump on the account is not yet a recoverable database. The restore test is a person importing one
+`.sql.gz` into a scratch database in phpMyAdmin and comparing `SHOW TABLES` and a few `COUNT(*)`s with
+the live one, once a quarter; that is the step that proves the back-up rather than the script.

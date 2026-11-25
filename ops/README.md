@@ -1,78 +1,64 @@
-# ops — the code that runs on the host, not in the package
+# ops — what runs on the host
 
-This directory holds operator scripts that belong to the hosting account rather than to the `lwc`
-command: they run from cron, never ship in the npm package, and are the only things here that touch
-production data. They live in version control for the same reason `docs/scan/` does — a file that
-exists only on a shared host is a file nobody can diff, review or rebuild from.
+`back-up-db.sh` is the only thing here: a nightly `mysqldump` of every database on the account, written
+to `/home/<account>/backups/mysql/<YYYY-MM-DD>/<db>-<date>.sql.gz`. It is in the repository because a
+file that exists only on a shared host is one nobody can review or rebuild — not because it belongs to
+the `lwc` package, which it does not.
 
-## back-up-db.sh
+## Install, once
 
-Nightly `mysqldump` of every database on the account, written to
-`/home/<account>/backups/mysql/<YYYY-MM-DD>/<db>-<date>.sql.gz`, with a `sha256` beside each file.
+1. Create `~/.my.cnf` with the database user and password, mode `600`:
 
-```sh
-bin/back-up-db.sh              dump, verify, prune
-bin/back-up-db.sh --verify     re-check today's .gz files only
-bin/back-up-db.sh --restore-check FILE.sql.gz [--keep]
-                               load one dump into $RESTORE_DB and compare it with live
+```ini
+[client]
+user=account_scan
+password=…
 ```
 
-It records a few decisions worth keeping:
+Use File Manager → *New File* → `.my.cnf`, then *Change Permissions* to `0600`. It must not be readable
+by anyone else, and it must not live in `public_html`.
 
-- **`set -o pipefail` around `mysqldump | gzip`.** A dump that dies mid-stream must fail the run, not
-  leave a truncated file that looks like a back-up.
-- **`gzip -t` plus a `sha256` for every file**, inline, so integrity checking is not a second job
-  somebody has to remember to write.
-- **Pruning in the same run.** 14 daily directories plus 6 monthly copies; a back-up that fills the
-  quota stops being a back-up.
-- **The database list is checked, not assumed.** A database that does not exist is skipped with a log
-  line instead of failing the other five — `fiatgodx_scan` was dropped once and recreated later, which
-  is exactly the case that would otherwise read as "all back-ups broken".
-- **The dumps are outside `public_html`.** A `.sql.gz` under the web root is customer data with a URL.
-
-## db-credentials.php
-
-Prints a `[client]` block for `mysqldump` from the scan app's own `config.php`, which
-`back-up-db.sh` redirects into a `600` file and deletes on exit. One copy of the password exists on the
-account, in the file the site already uses; it is never an argument, never in `ps`, and never in the
-back-up log. Nothing in this directory contains a credential, and nothing should start to.
-
-## Installing on the host
+2. Upload the script:
 
 ```sh
-# from a checkout
 sftp <account>@<host> <<'EOF'
 -mkdir bin
-put ops/back-up-db.sh      bin/back-up-db.sh
-put ops/db-credentials.php bin/db-credentials.php
+put ops/back-up-db.sh bin/back-up-db.sh
 EOF
 ```
 
-Then cPanel → **Cron Jobs**, once per day at 03:17:
+3. Run it once by hand — cPanel → **Terminal**, `sh /home/<account>/bin/back-up-db.sh` — and look at
+`backups/mysql/<date>/` and `backups/error.log`. Nothing below matters until that first run is clean.
+
+## Cron
+
+cPanel → **Cron Jobs**, once per day at 03:17 (server time):
 
 ```cron
-17 3 * * * /bin/bash /home/<account>/bin/back-up-db.sh >> /home/<account>/backups/mysql/backup.log 2>&1
+17 3 * * * /bin/sh /home/<account>/bin/back-up-db.sh >> /home/<account>/backups/mysql/backup.log 2>&1
 ```
 
-The log line carries a UTC timestamp; cPanel cron fires in server time.
+## Retention
 
-## Rehearsing a restore
+14 days. Every run deletes `*.sql.gz` older than that, and a failed database is reported on stderr and
+exits non-zero, so a silent failure shows up as a cron email or a missing file. Raise `KEEP_DAYS` at the
+top of the script if the quota allows; there is no monthly tier on purpose.
 
-A back-up nobody has restored is a hope. Create a scratch database once in cPanel (**MySQL Databases**),
-grant the configured user **ALL PRIVILEGES** on it, and run:
+## The quarterly restore test
 
-```sh
-RESTORE_DB=<account>_restore_test /bin/bash /home/<account>/bin/back-up-db.sh \
-  --restore-check /home/<account>/backups/mysql/<date>/<account>_scan-<date>.sql.gz
-```
+A backup nobody has restored is a hypothesis. Once a quarter:
 
-It imports the dump, compares the table list exactly against the live database, prints approximate row
-totals for both, and drops the restored tables unless `--keep` is given. `TABLE_ROWS` is an estimate for
-InnoDB, so the totals catch an import that stopped early rather than proving every row.
+1. Download one `.sql.gz` and `gunzip` it locally.
+2. cPanel → **MySQL Databases** → create a scratch database, e.g. `<account>_restore_test`.
+3. phpMyAdmin → select it → **Import** → the `.sql` file.
+4. Compare `SHOW TABLES` and a couple of `SELECT COUNT(*)`s against the live database.
+5. Drop the scratch database.
+
+If a step fails, fix it then — not on the day the live database is gone.
 
 ## Not covered
 
-The scripts read `/home/<account>/` paths and a `fiatgodx_*` database list; both are near the top of
-`back-up-db.sh` and are the two lines to change on another account. If `mysqldump` is not in
-`/usr/local/bin`, `/usr/local/mysql/bin`, `/usr/bin` or `/bin`, the run stops with a `FATAL:` line
-naming the PATH it searched instead of writing an empty file.
+The path and the `fiatgodx_*` database list are literal; both are at the top of the script and are the
+two lines to change on another account. The dumps live outside `public_html` because a `.sql.gz` under
+the web root is customer data with a URL, and they are on the same disk as the databases they copy — a
+monthly copy taken off the account is worth more than a deeper retention on the account.
