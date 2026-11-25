@@ -34,7 +34,9 @@
  * failing check, whether the URL or the file is what is wrong. That comparison
  * is the point: the folder URL and the file URL are answered by different parts
  * of the host's configuration, so one can hold the checkout's bytes while the
- * other does not.
+ * other does not. It is byte for byte, as the checker's comparison is, so a copy
+ * the host re-encoded - CRLF, or a missing final newline - reads as a failed
+ * upload rather than a routing problem.
  *
  * Everything local is checked before anything remote: a bad argument or a
  * missing file stops the script before a socket is opened, so a failure cannot
@@ -158,11 +160,6 @@ function run(command, args, stdin) {
   });
 }
 
-/** A host may store CRLF; the page is compared line by line, as the checker does. */
-function withoutCr(text) {
-  return text.replace(/\r\n?/g, "\n");
-}
-
 /** One GET with the cache argued around, or null when the host does not answer. */
 async function fetchPage(url) {
   try {
@@ -172,7 +169,7 @@ async function fetchPage(url) {
       headers: { "cache-control": "no-cache" },
       signal: AbortSignal.timeout(15_000),
     });
-    return { status: response.status, body: withoutCr(await response.text()) };
+    return { status: response.status, body: await response.text() };
   } catch {
     return null;
   }
@@ -226,13 +223,15 @@ function causeOf(name, shipped) {
   }
   if (name === "/ still answers with the dashboard") return "site-rewrite";
   if (name === "app.js is revalidated, not cached for a year") return "folder-config";
+  if (name.startsWith("/explorer/style.css")) return "asset";
+  if (name.startsWith("/explorer/presets.json")) return "asset";
   if (name.startsWith("/explorer/rpc.php")) return "proxy";
   return "unclear";
 }
 
 const CAUSE_WIDTH = 13;
 
-function causeNote(cause, evidence) {
+function causeNote(cause, evidence, names = []) {
   const fileUrl = evidence.fileUrl.href;
   switch (cause) {
     case "routing":
@@ -260,6 +259,29 @@ function causeNote(cause, evidence) {
         "the four files this script sends. Upload it by hand or with " +
         "deploy/explorer-ftp-upload.mjs; the page files are irrelevant to it."
       );
+    case "asset": {
+      // style.css is one of the files this script sends; presets.json is not, so
+      // the advice has to differ even though both are file-byte checks.
+      const sendsIt = names.some((name) => name.startsWith("/explorer/style.css"));
+      const presets = names.some((name) => name.startsWith("/explorer/presets.json"));
+      const parts = [
+        "asset: the file the check names is not the checkout's copy byte for byte — " +
+          "a stale revision, re-encoded line endings, or a dropped final newline.",
+      ];
+      if (sendsIt) {
+        parts.push(
+          "style.css is one of the four files this script sends, so re-run the upload " +
+            "and check the listing above for a partial transfer.",
+        );
+      }
+      if (presets) {
+        parts.push(
+          "presets.json is not one of the four files this script sends; upload it by " +
+            "hand or with deploy/explorer-ftp-upload.mjs.",
+        );
+      }
+      return parts.join(" ");
+    }
     case "proxy":
       return (
         "proxy: rpc.php was sent, but this is the file itself or its same-origin " +
@@ -293,7 +315,7 @@ async function explainCheckFailure(base, output, status) {
   // One look at the host decides the folder-URL failures: does the file the page
   // is served from hold the checkout's bytes? A stale upload and a shadowed URL
   // differ in exactly this, and not in anything the check itself reports.
-  const page = await readFile(join(SOURCE_DIR, "index.html"), "utf8").then(withoutCr, () => null);
+  const page = await readFile(join(SOURCE_DIR, "index.html"), "utf8").catch(() => null);
   const fileUrl = new URL("explorer/index.html", base);
   const served = await fetchPage(fileUrl);
   const shipped = page === null || served === null ? null : served.status === 200 && served.body === page;
@@ -306,7 +328,8 @@ async function explainCheckFailure(base, output, status) {
   for (const { cause } of causes) {
     if (seen.has(cause)) continue;
     seen.add(cause);
-    console.error(`\n  ${causeNote(cause, { fileUrl, shipped })}`);
+    const names = causes.filter((entry) => entry.cause === cause).map((entry) => entry.name);
+    console.error(`\n  ${causeNote(cause, { fileUrl, shipped }, names)}`);
   }
 }
 
