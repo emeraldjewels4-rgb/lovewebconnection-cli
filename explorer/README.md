@@ -82,6 +82,12 @@ host rejects `DirectoryIndex` in `.htaccess` when `AllowOverride` leaves out
 `Indexes`) and re-upload the file with **Show Hidden Files** on. When
 `.htaccess` is the only file that changed, uploading it alone is enough.
 
+`deploy/explorer-ftp-upload.mjs` can push the same seven files with curl when a
+host has an FTPS login and a shell. It is optional: the file manager steps above
+are the documented route, and the script's own `--help` says so. It requires
+explicit FTPS (`--ssl-reqd`, with no opt-out), so a server that cannot do TLS is
+refused instead of accepting the password in the clear.
+
 `index.html` loads `app.js?v=7`. The parent site marks `.js` files immutable for
 a year, so bump that number whenever `app.js` changes; otherwise a browser that
 loaded the old script keeps running it.

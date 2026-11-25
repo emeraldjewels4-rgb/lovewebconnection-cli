@@ -1,9 +1,19 @@
 #!/usr/bin/env node
 /**
- * Uploads the explorer's seven files to a cPanel account over FTP.
+ * Uploads the explorer's seven files to a host that offers explicit FTPS.
  *
  *   node deploy/explorer-ftp-upload.mjs --host ftp.example.com --user account --dry-run
  *   node deploy/explorer-ftp-upload.mjs --host ftp.example.com --user account
+ *
+ * This is not the documented way to deploy the explorer: explorer/README.md
+ * uploads the seven files through the host's file manager, and that is the route
+ * the live site uses. The script is a fallback for a host with a shell and an
+ * FTPS login, and it says so in its own --help.
+ *
+ * TLS is required rather than offered. curl gets --ssl-reqd on every transfer, so
+ * a server without explicit FTPS is refused instead of quietly falling back to
+ * plaintext, and no flag turns that off: the password crosses the network on this
+ * connection.
  *
  * The host and the username come from the arguments. The password is asked for
  * after they check out, with the echo off, and handed to curl on stdin as a
@@ -16,7 +26,7 @@
  * prerequisite of the other deploy/ scripts, and it brings the parts of FTP
  * that are not worth reimplementing: a passive reply from a server behind NAT
  * (--ftp-skip-pasv-ip), folders created on demand (--ftp-create-dirs),
- * timeouts, and TLS if the host ever requires it.
+ * timeouts, and the explicit-TLS upgrade this script requires.
  *
  * Exit codes: 0 uploaded (or a clean dry run), 1 the upload failed, 2 the
  * arguments were refused.
@@ -46,7 +56,11 @@ const USAGE = `usage: node deploy/explorer-ftp-upload.mjs --host HOST --user USE
 Uploads ${FILES.join(", ")}
 from explorer/ in this checkout, with curl. The password is read from the
 terminal with echo off and is never an argument, an environment variable or a
-file.`;
+file, and TLS is required (--ssl-reqd): a server without explicit FTPS is
+refused rather than uploaded to in the clear.
+
+explorer/README.md documents the cPanel File Manager upload, which is the route
+the live site uses; this script is the fallback for a host with an FTPS login.`;
 
 class UsageError extends Error {}
 
@@ -163,7 +177,7 @@ async function planUploads() {
 
 function printPlan(options, files, total) {
   console.log(`would upload ${files.length} files from ${SOURCE_DIR}`);
-  console.log(`  to ftp://${options.host}:${options.port}/${options.remoteDir}`);
+  console.log(`  to ftp://${options.host}:${options.port}/${options.remoteDir} (explicit TLS required)`);
   for (const file of files) {
     console.log(
       `  ${file.name.padEnd(16)} ${formatBytes(file.size).padStart(8)}  ->  ${options.remoteDir}/${file.name}`,
@@ -267,6 +281,8 @@ async function uploadFile(options, password, file) {
       "--show-error",
       "--ftp-skip-pasv-ip",
       "--ftp-create-dirs",
+      // Required, not optional: the password is on this connection.
+      "--ssl-reqd",
       "--connect-timeout",
       "20",
       "--max-time",
@@ -328,7 +344,7 @@ async function main() {
   const password = await readPassword(`password for ${options.user}: `);
   if (!password) throw new Error("no password entered");
 
-  console.log(`uploading to ftp://${options.host}:${options.port}/${options.remoteDir}`);
+  console.log(`uploading to ftp://${options.host}:${options.port}/${options.remoteDir} (TLS required)`);
   for (const file of files) {
     await uploadFile(options, password, file);
     console.log(`  ${file.name.padEnd(16)} ${formatBytes(file.size).padStart(8)}  uploaded`);
