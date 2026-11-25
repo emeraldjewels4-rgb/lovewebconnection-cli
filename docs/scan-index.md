@@ -113,7 +113,9 @@ Until the database exists, every database-backed route answers `503` with
 
 `bin/back-up-db.sh` on the account dumps every database nightly with `mysqldump --single-transaction`,
 checks each file with `gzip -t` and a `sha256`, keeps 14 days plus 6 monthly copies, and prunes inside
-the same run. A rehearsal against a throwaway database is:
+the same run. `bin/` is only where it is installed: the script and its credential helper are tracked in
+`ops/`, next to this document's repository, so the back-up can be rebuilt from a checkout — see
+`ops/README.md`. A rehearsal against a throwaway database is:
 
 ```sh
 RESTORE_DB=<account>_restore_test /bin/bash /home/<account>/bin/back-up-db.sh \
