@@ -123,10 +123,11 @@ fallback for hosts whose root does not rewrite, but on this one the root rule
 answers first and the folder file never gets the request.
 
 With the line in place, every check in `npm run explorer:check` passes. Without
-it, checks 2 and 3 stay red — check 2 reporting the dashboard's byte count
-against the checkout's, check 3 because that page never asks for `app.js?v=8` —
-while checks 1 and 4-9 pass. That is the signature of a routing miss, not a
-failed upload, and `deploy/explorer-sftp-ship.mjs` reports it that way. If
+it, checks 2 and 3 stay red — check 2 reporting the served page's text against
+the checkout's, line endings and final newline included, check 3 because that
+page never asks for `app.js?v=8` — while checks 1 and 4-11 pass. That is the
+signature of a routing miss, not a failed upload, and
+`deploy/explorer-sftp-ship.mjs` reports it that way. If
 `/explorer/` is still the dashboard after the line is in, look for a 500 at that
 URL (the host rejects `RewriteRule` in `.htaccess` when `AllowOverride` leaves
 out `FileInfo`) and re-upload with hidden files shown.
