@@ -338,12 +338,19 @@ function isLoopbackHost(hostname: string): boolean {
   );
 }
 
-const KEY_LIKE_SEGMENT = /^[A-Za-z0-9_-]{24,}$/;
+/**
+ * Path words that name a route rather than a caller. Everything else is
+ * replaced, so redaction fails closed: a six-character key, a mixed-case token
+ * or a provider prefix is hidden exactly like a long hex one. Length and
+ * character class used to decide this, which let any short key through.
+ */
+const ROUTE_SEGMENT =
+  /^(?:v\d{1,2}|api|rpc|jsonrpc|rest|graphql|node|ws|wss|mainnet|testnet|devnet|beta|prod)$/i;
 
 /**
- * A log-safe endpoint label: origin plus path, with query, fragment, and any
- * key-like path segment removed. Provider attribution needs the host, not the
- * credential that happens to sit in the URL.
+ * A log-safe endpoint label: origin plus path, with query, fragment, userinfo,
+ * and every path segment that is not a route word replaced. Provider
+ * attribution needs the host, not the credential that happens to sit in the URL.
  */
 export function publicEndpoint(rpcUrl: string): string {
   let url: URL;
@@ -355,7 +362,9 @@ export function publicEndpoint(rpcUrl: string): string {
 
   const path = url.pathname
     .split("/")
-    .map((segment) => (KEY_LIKE_SEGMENT.test(segment) ? "<redacted>" : segment))
+    .map((segment) =>
+      segment === "" || ROUTE_SEGMENT.test(segment) ? segment : "<redacted>",
+    )
     .join("/");
   const origin = `${url.protocol}//${url.host}`;
 
@@ -480,12 +489,19 @@ export interface ProbeOutcome {
   primaryError: string | null;
 }
 
+/** Replace every URL in free text with its log-safe label. */
+function sanitizeText(text: string): string {
+  return text.replace(/https?:\/\/[^\s"'<>]+/gi, (url) => publicEndpoint(url));
+}
+
 function describeError(error: unknown): string {
   // viem's own message spans several lines; its one-line summary keeps the
-  // failover note readable in a single table row.
+  // failover note readable in a single table row. Either form embeds the URL it
+  // failed on, so both are sanitised before the message is printed or logged.
   const short = (error as { shortMessage?: unknown } | null)?.shortMessage;
-  if (typeof short === "string" && short.length > 0) return short;
-  return error instanceof Error ? error.message : String(error);
+  if (typeof short === "string" && short.length > 0) return sanitizeText(short);
+  const message = error instanceof Error ? error.message : String(error);
+  return sanitizeText(message);
 }
 
 /**

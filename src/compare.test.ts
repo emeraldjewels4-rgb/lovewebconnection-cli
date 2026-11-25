@@ -650,6 +650,28 @@ test("compare log records the winner with sanitised URLs", () => {
   assert.doesNotMatch(JSON.stringify(record), /SECRET/);
 });
 
+test("compare log hides a short path key, not only a long hex one", () => {
+  const report = sampleReport();
+  const keyed = "https://fast.example/v1/SHORTK";
+  report.fastest = keyed;
+  report.endpoints[0]!.url = keyed;
+  report.endpoints[0]!.error = `request to ${keyed} failed`;
+
+  const record = toCompareLogRecord(
+    report,
+    "sess-2",
+    Date.parse("2026-11-09T12:00:00.000Z"),
+  ) as { fastest: string; endpoints: Array<{ url: string; error: string | null }> };
+
+  assert.equal(record.fastest, "https://fast.example/v1/<redacted>");
+  assert.equal(record.endpoints[0]?.url, "https://fast.example/v1/<redacted>");
+  assert.equal(
+    record.endpoints[0]?.error,
+    "request to https://fast.example/v1/<redacted> failed",
+  );
+  assert.doesNotMatch(JSON.stringify(record), /SHORTK/);
+});
+
 test("JSON keeps bigints as strings and exposes labels and the verdict", () => {
   const report = sampleReport();
   report.endpoints[0]!.label = "drpc";

@@ -1226,12 +1226,16 @@ if (typeof loadEnvFile === "function" && existsSync(".env")) {
 }
 
 function describeError(error: unknown): string {
+  // viem puts the URL it failed on inside its message, so free text is scanned
+  // for URLs and each is reduced to its log-safe label first.
+  const redact = (text: string): string =>
+    text.replace(/https?:\/\/[^\s"'<>]+/gi, (url) => publicEndpoint(url));
   if (error instanceof Error) {
     const short = (error as { shortMessage?: unknown }).shortMessage;
-    if (typeof short === "string" && short.length > 0) return short;
-    return error.message;
+    if (typeof short === "string" && short.length > 0) return redact(short);
+    return redact(error.message);
   }
-  return String(error);
+  return redact(String(error));
 }
 
 try {
@@ -1714,8 +1718,16 @@ try {
     console.error(`chain mismatch: ${error.message}`);
   } else {
     console.error(`connection failed: ${describeError(error)}`);
+    // Name the endpoint the run actually used: a preset or a --chain switch may
+    // differ from LWC_RPC_URL, and the key inside the URL must not be printed.
+    let checked: string | null = process.env.LWC_RPC_URL?.trim() || null;
+    try {
+      checked = parseChainConfig(process.env, chainOverride).rpcUrl;
+    } catch {
+      // Config errors have their own branch; the env value is the fallback.
+    }
     console.error(
-      `  checked endpoint: ${process.env.LWC_RPC_URL ?? "(LWC_RPC_URL not set)"}`,
+      `  checked endpoint: ${checked === null ? "(LWC_RPC_URL not set)" : publicEndpoint(checked)}`,
     );
     console.error("  verify the RPC is reachable and accepts JSON-RPC over POST.");
   }

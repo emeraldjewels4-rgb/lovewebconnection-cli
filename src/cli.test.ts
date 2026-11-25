@@ -143,3 +143,51 @@ test("the usage line and the help body name the same commands", async () => {
   const listed = /usage: lwc \[([a-z|-]+)\]/.exec(result.stderr)?.[1] ?? "";
   assert.deepEqual(listed.split("|"), names);
 });
+
+interface Failure {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+function failureOf(error: unknown): Failure {
+  const failure = error as Partial<Failure>;
+  return {
+    code: failure.code ?? null,
+    stdout: failure.stdout ?? "",
+    stderr: failure.stderr ?? "",
+  };
+}
+
+/**
+ * The connection-failure report is the one place the CLI prints an endpoint of
+ * its own, and it used to print the raw LWC_RPC_URL — key included. A six
+ * character token on a refused loopback port proves short keys stay out without
+ * contacting any chain.
+ */
+test("a connection failure names the endpoint without its short key", async () => {
+  const env = {
+    ...process.env,
+    LWC_CHAIN_ID: "1",
+    LWC_RPC_URL: "http://127.0.0.1:1/v1/SHORTK",
+    LWC_TIMEOUT_MS: "250",
+    LWC_RPC_AUTH: "",
+    LWC_FALLBACK_RPC_URL: "",
+    LWC_CHAIN: "",
+  };
+
+  const failure = failureOf(
+    await run(process.execPath, [cli], { env }).then(
+      () => null,
+      (error: unknown) => error,
+    ),
+  );
+
+  assert.equal(failure.code, 1);
+  assert.equal(failure.stdout, "");
+  assert.doesNotMatch(failure.stderr, /SHORTK/);
+  assert.match(
+    failure.stderr,
+    /checked endpoint: http:\/\/127\.0\.0\.1:1\/v1\/<redacted>/,
+  );
+});

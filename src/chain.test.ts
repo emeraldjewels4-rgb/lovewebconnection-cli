@@ -33,7 +33,7 @@ test("publicEndpoint keeps the provider host and drops credentials", () => {
   assert.equal(publicEndpoint("https://xlayer.drpc.org"), "https://xlayer.drpc.org");
   assert.equal(
     publicEndpoint("https://user:pass@rpc.example.org/key?apikey=secret#frag"),
-    "https://rpc.example.org/key",
+    "https://rpc.example.org/<redacted>",
   );
   assert.equal(
     publicEndpoint("https://rpc.example.org/v2/SECRETKEY123456789012345678901234"),
@@ -41,6 +41,28 @@ test("publicEndpoint keeps the provider host and drops credentials", () => {
   );
   assert.equal(publicEndpoint("http://127.0.0.1:8545"), "http://127.0.0.1:8545");
   assert.equal(publicEndpoint("not a url"), "<invalid>");
+});
+
+test("publicEndpoint hides short and oddly shaped keys, not just long hex", () => {
+  // A six-character token, a plain word, and a dashed key: none is a secret
+  // shape the old 24+ alphanumeric rule recognised, and all must go.
+  assert.equal(
+    publicEndpoint("https://rpc.example.org/v1/SHORTK"),
+    "https://rpc.example.org/v1/<redacted>",
+  );
+  assert.equal(
+    publicEndpoint("https://rpc.example.org/abcdefgh"),
+    "https://rpc.example.org/<redacted>",
+  );
+  assert.equal(
+    publicEndpoint("https://rpc.example.org/abc-def-ghi"),
+    "https://rpc.example.org/<redacted>",
+  );
+  // Route words survive, so a log still says which route was used.
+  assert.equal(
+    publicEndpoint("https://rpc.example.org/v2/jsonrpc"),
+    "https://rpc.example.org/v2/jsonrpc",
+  );
 });
 
 test("parses a minimal config and applies defaults", () => {
@@ -592,6 +614,28 @@ test("probeWithFallback never sends a credential to the backup", async () => {
     tried,
     ["https://mainnet.base.org"],
     "an authenticated endpoint is never bypassed for another operator",
+  );
+});
+
+test("probeWithFallback keeps a short key out of its failure message", async () => {
+  const config = parseChainConfig({
+    LWC_CHAIN_ID: "1",
+    LWC_RPC_URL: "https://rpc.example.org/v1/SHORTK",
+    LWC_FALLBACK_RPC_URL: "https://backup.example.org/v1/OTHERK",
+  });
+
+  await assert.rejects(
+    () =>
+      probeWithFallback(
+        (candidate) => stubClient({ error: `request to ${candidate.rpcUrl} failed` }),
+        config,
+      ),
+    (error: Error) => {
+      assert.doesNotMatch(error.message, /SHORTK|OTHERK/);
+      assert.match(error.message, /https:\/\/rpc\.example\.org\/v1\/<redacted>/);
+      assert.match(error.message, /https:\/\/backup\.example\.org\/v1\/<redacted>/);
+      return true;
+    },
   );
 });
 
