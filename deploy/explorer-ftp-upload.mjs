@@ -109,8 +109,17 @@ function parseArgs(argv) {
   ]) {
     if (/[\r\n\0]/.test(text)) throw new UsageError(`${flag} cannot contain a line break`);
   }
-  if (/\s/.test(options.host) || options.host.includes("/")) {
-    throw new UsageError(`--host must be a bare hostname, not '${options.host}'`);
+  // The host is pasted into ftp://HOST:PORT/, so anything that a URL reads as
+  // user info, a port, a path, a query, a fragment or an escape would silently
+  // retarget the upload. An allowlist is easier to keep right than a list of
+  // the characters that happen to break it today.
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(options.host)) {
+    const stray = [...new Set(options.host.replace(/[A-Za-z0-9.-]/g, ""))].join(" ");
+    throw new UsageError(
+      `--host must be a bare hostname such as ftp.example.com, not '${options.host}'` +
+        (stray ? ` (remove: ${stray})` : "") +
+        "; use --port for the port, and leave the username to --user",
+    );
   }
 
   options.remoteDir = options.remoteDir.replace(/^\/+|\/+$/g, "");
@@ -174,10 +183,21 @@ function printPlan(options, files, total) {
 async function readPassword(prompt) {
   if (!process.stdin.isTTY) {
     // Piped input, so a wrapper can supply the value without putting it in argv.
+    // stdin that ends before a line arrives emits "close" and never "line", so
+    // waiting on "line" alone would leave no handles and exit 0 having uploaded
+    // nothing: the reader has to lose that race and say why.
     const reader = createInterface({ input: process.stdin, terminal: false });
-    const [line] = await once(reader, "line");
+    const line = await Promise.race([
+      once(reader, "line").then(([value]) => value),
+      once(reader, "close").then(() => undefined),
+    ]);
     reader.close();
-    return line ?? "";
+    if (typeof line !== "string") {
+      throw new Error(
+        "no password on stdin (it ended before a line); nothing was uploaded",
+      );
+    }
+    return line;
   }
 
   process.stdout.write(prompt);
