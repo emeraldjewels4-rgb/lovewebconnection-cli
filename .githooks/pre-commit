@@ -44,6 +44,33 @@ else
   exit 2
 fi
 
+# explorer-x10-upload.zip is built from explorer/ and gitignored, so a machine that never built one has
+# nothing to check and passes. The failure worth catching is a stale copy: it is dragged into a host's
+# file manager and uploads yesterday's page, and the page itself works from the folder, so nothing else
+# would notice. exit 1 is the archive disagreeing with the folder, exit 2 an archive that cannot be read
+# at all - a refusal, because nothing proved it right.
+echo "pre-commit: explorer upload zip against explorer/"
+if node deploy/explorer-zip.mjs --check; then
+  :
+else
+  status=$?
+  echo ""
+  case "$status" in
+    1)
+      echo "  REFUSED: explorer-x10-upload.zip does not match explorer/; the commit was not created."
+      echo "            npm run explorer:zip    then commit again"
+      ;;
+    2)
+      echo "  REFUSED: explorer-x10-upload.zip could not be read, so it was not checked; the commit was not created."
+      echo "            npm run explorer:zip    then commit again"
+      ;;
+    *)
+      echo "  REFUSED: the explorer zip check could not run (node exited $status); the commit was not created."
+      ;;
+  esac
+  exit 2
+fi
+
 # deploy/*.ps1 are exercised by nothing: the typecheck and the test suite are TypeScript, so a broken
 # probe in proxy-web9999.ps1 reaches a commit untouched and only fails on the server, where the site is
 # already being changed. -SelfTest is pure (no IIS, no network) and takes about a second, so any commit

@@ -27,16 +27,8 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
-/** The whole folder, in the order the README lists it. */
-const FILES = [
-  "index.html",
-  "style.css",
-  "app.js",
-  "lookup-state.js",
-  "presets.json",
-  "rpc.php",
-  ".htaccess",
-];
+// The zip builder reads the same list, so the two cannot ship different sets.
+import { EXPLORER_FILES as FILES } from "./explorer-files.mjs";
 
 const SOURCE_DIR = join(import.meta.dirname, "..", "explorer");
 

@@ -65,6 +65,13 @@ endpoint that sends no CORS header.
    out leaves the page dead.
 4. Open `https://<your-domain>/explorer/`.
 
+`npm run explorer:zip` builds `explorer-x10-upload.zip` from those seven files
+for a drag-and-drop upload: extract it in `public_html/explorer`, with hidden
+files shown, then delete the zip. The archive is gitignored, so it is built when
+wanted; `npm run explorer:zip:check` fails if an existing copy no longer matches
+the folder, and the pre-commit hook runs that check when one is present, because
+a stale zip uploads a page the checkout no longer has.
+
 Step 4 depends on `.htaccess` pinning `DirectoryIndex index.html`. The site root
 answers a directory request with its own dashboard (`/assets/` behaves the same
 way), and a folder inherits that until it declares an index of its own, which is
