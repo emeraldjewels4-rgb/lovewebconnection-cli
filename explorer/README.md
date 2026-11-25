@@ -214,12 +214,15 @@ A deploy can land part of the batch: the page current and a script not, or the
 other way round. The check names what is behind — a failure on 2, 5 or 6 is one
 of the three files it compares byte for byte, and the detail says how far off it
 is. To see the whole batch before touching the host, compare sizes, because a
-page can fail at an identical size:
+page can fail at an identical size. Each block sets `BASE` only when it is not
+already set, so the commands work unchanged against another origin or a local
+copy and any one of them can be run on its own:
 
 ```sh
+BASE=${BASE:-https://fiatgod.x10.mx}
 for f in index.html app.js lookup-state.js; do
   printf '%-16s host %6s B   local %6s B\n' "$f" \
-    "$(curl -s "https://fiatgod.x10.mx/explorer/$f" | wc -c)" "$(wc -c < "explorer/$f")"
+    "$(curl -s "$BASE/explorer/$f" | wc -c)" "$(wc -c < "explorer/$f")"
 done
 ```
 
@@ -250,24 +253,17 @@ upload still gets a consistent pair. `scp` copies bytes as they are on disk,
 which is what the check requires: no CRLF conversion, and the final newline
 kept. A file manager is what re-encodes them.
 
-Then verify, in this order. First the bytes: each host size must equal the local
-size exactly, never merely resemble it.
+Then verify, in this order. First the bytes: run the size loop above again, and
+after the upload every pair must be two equal numbers, not two similar ones.
+Second the line endings, which a size alone can hide — zero CR bytes on every
+file means the host kept LF, and the equal sizes are what prove the final
+newline survived:
 
 ```sh
-for f in index.html app.js lookup-state.js; do
-  printf '%-16s host %6s B   local %6s B\n' "$f" \
-    "$(curl -s "https://fiatgod.x10.mx/explorer/$f" | wc -c)" "$(wc -c < "explorer/$f")"
-done
-```
-
-Second the line endings, which a size alone can hide. Zero CR bytes on every
-file means the host kept LF; the size comparison above is what proves the final
-newline survived.
-
-```sh
+BASE=${BASE:-https://fiatgod.x10.mx}
 for f in index.html app.js lookup-state.js; do
   printf '%-16s CR bytes on host: %s\n' "$f" \
-    "$(curl -s "https://fiatgod.x10.mx/explorer/$f" | tr -cd '\r' | wc -c)"
+    "$(curl -s "$BASE/explorer/$f" | tr -cd '\r' | wc -c)"
 done
 ```
 
@@ -275,20 +271,24 @@ Third, the page's version token, which must be the one this checkout names — t
 two lines below have to print the same thing:
 
 ```sh
-curl -s https://fiatgod.x10.mx/explorer/ | grep -o 'app\.js?v=[0-9]*'
-grep -o 'app\.js?v=[0-9]*' explorer/index.html
+BASE=${BASE:-https://fiatgod.x10.mx}
+curl -s "$BASE/explorer/" | grep -o 'app\.js?v=[A-Za-z0-9._-]*'
+grep -o 'app\.js?v=[A-Za-z0-9._-]*' explorer/index.html
 ```
 
 Fourth and last, the acceptance gate — the nine checks, not the three:
 
 ```sh
-npm run explorer:check
-# 9 checks passed
+BASE=${BASE:-https://fiatgod.x10.mx}
+npm run explorer:check -- --base "$BASE"
 ```
 
 Exit status 0 and `9 checks passed` means the deploy is done; that run also
 re-checks the revalidation header, the 404, the dashboard and the proxy, so a
-file outside this batch that broke shows up here. A remaining failure on 2, 5 or
+file outside this batch that broke shows up here. Against a local static copy
+two of those are expected to fail — a static server has no dashboard at `/` and
+no PHP to answer the proxy — so use the first three steps to check a local copy
+and keep the gate for the real host. A remaining failure on 2, 5 or
 6 quoting `line endings are CRLF` or `has no final newline` means the bytes were
 rewritten on the way up: re-send that file over `scp` after confirming the local
 copy is LF (`file explorer/app.js`), rather than editing the host copy.
