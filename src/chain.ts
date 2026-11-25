@@ -208,11 +208,26 @@ export function parseChainConfig(
   }
 
   const envChainId = env.LWC_CHAIN_ID?.trim() || null;
+  const envChainName = env.LWC_CHAIN?.trim() || null;
+  const envChainNamePreset = envChainName === null ? null : resolveChainPreset(envChainName);
+  const envChainNameId =
+    envChainName !== null && /^\d+$/.test(envChainName) && envChainNamePreset === null
+      ? Number(envChainName)
+      : null;
+
+  const idConflict =
+    preset !== null && envChainId !== null && parseChainId(envChainId) !== preset.chainId;
+  // `.env` can name its chain through LWC_CHAIN as well as LWC_CHAIN_ID, so the
+  // explicit preset above has to be compared with both: an endpoint, backup and
+  // labels configured for base describe base, not a polygon the selector picked.
+  // With no env chain identity at all there is nothing to disagree with, which
+  // keeps `--chain <id>` beside only LWC_RPC_URL working.
   const presetConflictsWithEnv =
     preset !== null &&
-    envChainId !== null &&
-    parseChainId(envChainId) !== preset.chainId;
-  if (presetConflictsWithEnv && explicit === null) {
+    (idConflict ||
+      (envChainNamePreset !== null && envChainNamePreset.chainId !== preset.chainId) ||
+      (envChainNameId !== null && envChainNameId !== preset.chainId));
+  if (idConflict && explicit === null) {
     throw new ChainConfigError(
       `LWC_CHAIN is ${chosen} (${preset.chainId}), but LWC_CHAIN_ID is ${envChainId}. ` +
         `Remove LWC_CHAIN_ID or set it to ${preset.chainId}.`,
@@ -251,8 +266,7 @@ export function parseChainConfig(
   // one outright or through LWC_CHAIN; a preset picked by `--chain` is another
   // operator's endpoint and must not receive it. Nothing configured at all is
   // not an owner either, so an ad-hoc preset does not inherit the header.
-  const envPreset = env.LWC_CHAIN?.trim() ? resolveChainPreset(env.LWC_CHAIN.trim()) : null;
-  const credentialEndpoint = envRpcUrl ?? envPreset?.rpcUrl ?? null;
+  const credentialEndpoint = envRpcUrl ?? envChainNamePreset?.rpcUrl ?? null;
 
   const configuredAuth = env.LWC_RPC_AUTH?.trim() || null;
   if (configuredAuth && /[\r\n]/.test(configuredAuth)) {

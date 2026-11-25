@@ -213,6 +213,54 @@ test("the credential survives a --chain selector that keeps its own endpoint", (
   assert.equal(config.authDroppedHost, null);
 });
 
+test("an explicit preset ignores an endpoint .env pinned to another chain", () => {
+  // LWC_CHAIN names the network even when LWC_CHAIN_ID is absent, so the base
+  // endpoint must not be probed while expecting polygon's chain id.
+  const config = parseChainConfig(
+    {
+      LWC_CHAIN: "base",
+      LWC_RPC_URL: "https://base.example.org",
+      LWC_RPC_AUTH: "Bearer base-key",
+    },
+    "polygon",
+  );
+
+  assert.equal(config.chainId, 137);
+  assert.equal(config.rpcUrl, "https://polygon-bor-rpc.publicnode.com");
+  assert.equal(config.fallbackRpcUrl, "https://polygon.drpc.org");
+  assert.equal(config.name, "polygon");
+  assert.equal(config.nativeCurrency.symbol, "POL");
+  assert.equal(config.authHeader, null, "the base credential stays with base");
+});
+
+test("an explicit preset ignores .env pinned to a custom chain id", () => {
+  const config = parseChainConfig(
+    { LWC_CHAIN: "999", LWC_RPC_URL: "https://arb.example.org" },
+    "xlayer",
+  );
+
+  assert.equal(config.chainId, 196);
+  assert.equal(config.rpcUrl, "https://xlayer.drpc.org");
+});
+
+test("an explicit preset that agrees with .env still uses its endpoint", () => {
+  const config = parseChainConfig(
+    { LWC_CHAIN: "base", LWC_RPC_URL: "https://base.example.org" },
+    "base",
+  );
+
+  assert.equal(config.rpcUrl, "https://base.example.org");
+  assert.equal(config.preset, "base");
+});
+
+test("a selector with no env chain identity still uses LWC_RPC_URL", () => {
+  // The documented shortcut: keep only the endpoint and pass the id to --chain.
+  const config = parseChainConfig({ LWC_RPC_URL: "https://eth.example.org" }, "1");
+
+  assert.equal(config.chainId, 1);
+  assert.equal(config.rpcUrl, "https://eth.example.org");
+});
+
 test("an explicit preset still uses an endpoint for the same chain", () => {
   const config = parseChainConfig(
     { LWC_CHAIN_ID: "196", LWC_RPC_URL: "https://xlayer.example.org" },
