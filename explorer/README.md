@@ -192,13 +192,18 @@ npm run explorer:check
 The check defaults to `https://fiatgod.x10.mx`, so it needs no arguments here;
 pass `-- --base https://<other-domain>` for another host. It reads only, plus
 the one `eth_chainId` POST the page itself makes. Each check prints an `ok`
-line, and the run ends with `7 checks passed` and exit status 0: the upload
-landed, `/explorer/app.js` is revalidated rather than cached for a year, and the
-proxy answers this site's own origin. A failure prints `FAIL` against that check
-and ends with `N of 7 checks failed`, naming them, with exit status 1; exit
-status 2 is a usage error. A failure on checks 1, 3 or 4 when the files are
-demonstrably on disk is usually a stale browser or edge cache rather than a bad
-upload.
+line, and the run ends with `9 checks passed` and exit status 0: the upload
+landed, `index.html`, `app.js` and `lookup-state.js` are the files in this
+checkout (CR ignored, since an upload can store CRLF), `/explorer/app.js` is
+revalidated rather than cached for a year, and the proxy answers this site's own
+origin. `app.js` and `lookup-state.js` are compared byte for byte because the
+page names only a version: a host can serve the checkout's page beside scripts
+from an earlier upload and every other check still passes. A failure prints
+`FAIL` against that check and ends with `N of 9 checks failed`, naming them, with
+exit status 1; exit status 2 is a usage error. A failure on checks 1, 3 or 4 when
+the files are demonstrably on disk is usually a stale browser or edge cache
+rather than a bad upload; a failure on 2, 5 or 6 means the upload is not the
+build in the checkout.
 
 ## Rate-limit the proxy at the edge
 
