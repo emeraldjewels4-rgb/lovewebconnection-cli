@@ -111,7 +111,21 @@ echo "pre-commit: tests"
 # stops a commit that touches the proxy; when php is present, any proxy skip is a
 # refusal, because then something other than the missing interpreter is wrong.
 test_log=$(mktemp)
-if ! npm test 2>&1 | tee "$test_log"; then
+# The status has to be npm's, not tee's: in `npm test | tee log` the pipeline exits
+# with tee's status, so a failing suite read as green and a commit went through
+# during a browser-test flake. The output is captured, printed, and then npm's own
+# status is judged. `set -o pipefail` would do the same but is not part of sh, and
+# this hook runs under sh.
+if npm test >"$test_log" 2>&1; then
+  test_status=0
+else
+  test_status=$?
+fi
+cat "$test_log"
+if [ "$test_status" -ne 0 ]; then
+  echo ""
+  echo "  REFUSED: the test suite failed (npm test exited $test_status); the commit was not created."
+  echo "            Run npm test to see every failure."
   rm -f "$test_log"
   exit 1
 fi
