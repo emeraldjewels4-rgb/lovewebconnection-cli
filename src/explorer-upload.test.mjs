@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -67,3 +69,44 @@ test("a bare hostname still reaches the plan", async () => {
   assert.match(result.stdout, new RegExp(`would upload ${EXPLORER_FILES.length} files`));
   assert.match(result.stdout, /dry run: arguments and local files check out/);
 });
+
+// A fake curl first on PATH records its arguments and exits 0, so the upload's argv can be read
+// without a socket: the property that matters is that every transfer asks for explicit TLS, which is
+// what keeps the password off a plaintext connection. It needs a POSIX shell, so Windows skips it.
+test(
+  "every transfer requires TLS, so the password cannot go out in the clear",
+  { skip: process.platform === "win32" ? "needs a POSIX shell to stand in for curl" : false },
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lwc-curl-"));
+    const argvLog = join(dir, "argv.log");
+    try {
+      await writeFile(join(dir, "curl"), `#!/bin/sh\necho "$@" >> "${argvLog}"\ncat > /dev/null\n`, {
+        mode: 0o755,
+      });
+
+      const result = await new Promise((resolve) => {
+        const child = spawn(
+          process.execPath,
+          [SCRIPT, "--host", "127.0.0.1", "--port", "1", "--user", "account"],
+          {
+            env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+            stdio: ["pipe", "pipe", "pipe"],
+          },
+        );
+        let stdout = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+        child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+        child.on("close", (status) => resolve({ status, stdout, stderr }));
+        child.stdin.end("password\n");
+      });
+
+      assert.equal(result.status, 0, result.stderr);
+      const transfers = (await readFile(argvLog, "utf8")).trim().split("\n");
+      assert.equal(transfers.length, EXPLORER_FILES.length);
+      for (const transfer of transfers) assert.ok(transfer.includes("--ssl-reqd"), transfer);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);

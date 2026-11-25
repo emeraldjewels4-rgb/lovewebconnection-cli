@@ -70,15 +70,35 @@ jobs:
         run: |
           set -euo pipefail
           npm test | tee tests.log
-          # The browser test is skipped here and run below; nothing else may skip.
-          grep -q "skipped 1" tests.log
+          # Exactly one skip is allowed: the browser test, which runs below. Anything
+          # else skipping means a check silently stopped checking — src/explorer-rpc
+          # .test.mjs skips itself when the runner has no php, which is why this is an
+          # exact count and not a substring match ("skipped 10" contains "skipped 1").
+          if ! grep -qx "ℹ skipped 1" tests.log; then
+            echo "::error::expected exactly 1 skipped test (the browser one); saw:"
+            grep -E "^ℹ (tests|pass|fail|skipped|cancelled) " tests.log || true
+            exit 1
+          fi
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
           LWC_SKIP_BROWSER: "1"
 
+      # Asserting a pass count matters as much as the skip count: a test that
+      # skips itself still exits 0, so without these a broken browser would look
+      # like a green step.
       - name: Browser test
         run: |
           set -euo pipefail
-          timeout 180 node --test src/explorer-browser.test.ts
+          timeout 180 node --test src/explorer-browser.test.ts | tee browser.log
+          grep -qx "ℹ pass 1" browser.log || {
+            echo "::error::the browser test did not pass; saw:"
+            grep -E "^ℹ (tests|pass|fail|skipped) " browser.log || true
+            exit 1
+          }
+          grep -qx "ℹ skipped 0" browser.log || {
+            echo "::error::the browser test skipped itself instead of running; saw:"
+            grep -E "^ℹ (tests|pass|fail|skipped) " browser.log || true
+            exit 1
+          }
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}

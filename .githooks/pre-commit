@@ -104,7 +104,51 @@ echo "pre-commit: typecheck"
 npm run typecheck
 
 echo "pre-commit: tests"
-npm test
+# Two tests skip themselves rather than fail: the browser one when no Chrome, Edge
+# or Chromium is installed, and src/explorer-rpc.test.mjs when there is no php (or
+# no openssl) to serve its fixture. A skip exits 0, so the suite's own summary is
+# checked rather than trusted. php is optional for this repo, so its absence only
+# stops a commit that touches the proxy; when php is present, any proxy skip is a
+# refusal, because then something other than the missing interpreter is wrong.
+test_log=$(mktemp)
+if ! npm test 2>&1 | tee "$test_log"; then
+  rm -f "$test_log"
+  exit 1
+fi
+skipped=$(sed -n 's/^ℹ skipped \([0-9][0-9]*\)$/\1/p' "$test_log" | tail -1)
+php_bin=${LWC_PHP:-php}
+if command -v "$php_bin" >/dev/null 2>&1; then
+  php_state="$php_bin is on PATH, so the proxy tests were expected to run"
+else
+  php_state="no php on PATH ($php_bin); set LWC_PHP to a php binary with curl and openssl"
+fi
+touches_proxy=no
+if git diff --cached --name-only | grep -qxE '(explorer/rpc\.php|src/explorer-rpc\.test\.mjs)'; then
+  touches_proxy=yes
+fi
+refuse() {
+  echo ""
+  echo "  REFUSED: $1"
+  grep -E "^ℹ (tests|pass|fail|skipped|cancelled) " "$test_log" | sed 's/^/        /'
+  echo "        $php_state"
+  echo "        Run it alone to see why: node --test src/explorer-rpc.test.mjs"
+  rm -f "$test_log"
+  exit 2
+}
+if [ -z "$skipped" ]; then
+  refuse "the suite printed no skip count, so nothing shows whether the proxy ran."
+elif [ "$skipped" -gt 1 ]; then
+  if command -v "$php_bin" >/dev/null 2>&1; then
+    refuse "php is installed yet the proxy tests skipped, so a check did not run."
+  elif [ "$touches_proxy" = yes ]; then
+    refuse "this commit changes the proxy, and the tests for it would have skipped."
+  else
+    echo "  WARNING: the proxy tests skipped, so explorer/rpc.php was not exercised here."
+    echo "           $php_state"
+    echo "           Allowed because nothing staged touches the proxy; CI still runs them."
+  fi
+fi
+rm -f "$test_log"
 
 # Inert until a preset history is recorded; skips when the file does not exist.
 echo "pre-commit: preset gate"
