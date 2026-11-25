@@ -1,4 +1,11 @@
-import { createLookupTracker, lookupUrl, readLookupParams } from "./lookup-state.js?v=1";
+import {
+  PROBE_CACHE_MS,
+  createLookupTracker,
+  lookupUrl,
+  readLookupParams,
+  readProbeCache,
+  writeProbeCache,
+} from "./lookup-state.js?v=2";
 
 const $ = (id) => document.getElementById(id);
 
@@ -10,6 +17,19 @@ const state = {
 };
 
 const lookups = createLookupTracker();
+
+/**
+ * Every tab of this origin shares the probe cache, so a reload or a second tab
+ * does not spend the twelve calls the table costs. Reading storage can throw in
+ * a privacy mode; a page that cannot keep the cache simply probes.
+ */
+const probeStore = (() => {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+})();
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
@@ -283,7 +303,7 @@ function selectChain(name) {
   }
 }
 
-function renderChains(results = {}) {
+function renderChains(results = {}, checkedAt = Date.now()) {
   const body = document.querySelector("#chains tbody");
   body.replaceChildren();
 
@@ -331,7 +351,7 @@ function renderChains(results = {}) {
       `${healthy} of ${probed.length} healthy` +
       (backups ? ` · ${backups} on a backup` : "") +
       (failed ? ` · ${failed} down` : "") +
-      ` · checked ${new Date().toLocaleTimeString()}`;
+      ` · checked ${new Date(checkedAt).toLocaleTimeString()}`;
   }
 }
 
@@ -593,6 +613,22 @@ async function submit(event) {
 }
 
 async function probeAll() {
+  // A cold table is twelve calls of a visitor's minute, so an answer still inside
+  // the window is reused instead of paid for again.
+  const cached = readProbeCache(
+    probeStore,
+    state.chains.map((chain) => chain.name),
+    Date.now(),
+    PROBE_CACHE_MS,
+  );
+  if (cached) {
+    // The table says when it was checked, so a reused probe reports its own time
+    // instead of claiming a check that did not happen.
+    renderChains(cached.results, cached.savedAt);
+    renderProxyNote();
+    return;
+  }
+
   const results = {};
   renderChains(results);
   await Promise.all(
@@ -602,6 +638,7 @@ async function probeAll() {
       renderProxyNote();
     }),
   );
+  writeProbeCache(probeStore, results, Date.now());
 }
 
 async function boot() {

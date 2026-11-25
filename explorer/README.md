@@ -28,7 +28,7 @@ app; its tables and restore steps are in [`../docs/scan-index.md`](../docs/scan-
 | --- | --- |
 | `index.html` | The page shell. |
 | `style.css` | Styles, matching the dark web9999 dashboard. |
-| `app.js` | Probes the presets, renders the table, runs lookups (tokens read `name`, `symbol`, `decimals` and `totalSupply`; contracts read code and the EIP-1967 slots). |
+| `app.js` | Probes the presets (reusing a probe from the last minute), renders the table, runs lookups (tokens read `name`, `symbol`, `decimals` and `totalSupply`; contracts read code and the EIP-1967 slots). |
 | `presets.json` | Generated from `CHAIN_PRESETS`; do not edit by hand. |
 | `rpc.php` | Same-origin read-only JSON-RPC proxy with failover. |
 | `.htaccess` | No directory listing, the folder's own directory index, basic security headers. |
@@ -50,8 +50,8 @@ chain and mode and runs the lookup on load. Each lookup is a history entry, so
 browser back and forward move between them and re-run the one in the URL.
 Lookups are sequence-guarded: a slow earlier response is discarded instead of
 rendering over a newer one, and starting a lookup aborts the requests of the
-previous one so only the newest stays in flight. The URL and lookup-lifecycle
-helpers live in `lookup-state.js`, imported by `app.js` with a `?v=` query;
+previous one so only the newest stays in flight. The URL, lookup-lifecycle and
+probe-cache helpers live in `lookup-state.js`, imported by `app.js` with a `?v=` query;
 bump that query when the helper file changes. `src/explorer-state.test.ts`
 covers both, and `src/explorer-browser.test.ts` drives the real page in a
 headless Chrome, Edge or Chromium against a stub `rpc.php` that refuses the same
@@ -107,7 +107,7 @@ are the documented route, and the script's own `--help` says so. It requires
 explicit FTPS (`--ssl-reqd`, with no opt-out), so a server that cannot do TLS is
 refused instead of accepting the password in the clear.
 
-`index.html` loads `app.js?v=7`. The parent site marks `.js` files immutable for
+`index.html` loads `app.js?v=8`. The parent site marks `.js` files immutable for
 a year, so bump that number whenever `app.js` changes; otherwise a browser that
 loaded the old script keeps running it.
 
@@ -148,10 +148,17 @@ and each lookup costs:
 | Token (code plus name, symbol, decimals, totalSupply) | 5 |
 
 A load plus two lookups is 14 to 22 calls, and the 60 leaves room for about nine
-token lookups after a load, or seven after two tabs: a reader works through a few
-lookups a minute while an abuser is capped at roughly 60 MiB a minute at the 1 MiB
-answer cap. At the thirty this started with, a load plus four token lookups was
-already refused. Back and forward re-run a lookup, so it costs the same again.
+token lookups after a load: a reader works through a few lookups a minute while an
+abuser is capped at roughly 60 MiB a minute at the 1 MiB answer cap. At the thirty
+this started with, a load plus four token lookups was already refused. Back and
+forward re-run a lookup, so it costs the same again.
+
+**The boot probe is reused for a minute.** `app.js` keeps the six probe answers in
+`localStorage` under `lwc-explorer-probes`, for the same 60 seconds the proxy
+counts, so a reload or a second tab renders the table without twelve more calls; a
+cache older than that, or one missing a chain the presets now list, is ignored and
+the page probes again. That is what makes a second tab cost a lookup rather than a
+lookup plus the table.
 
 Two things move that sum:
 

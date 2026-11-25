@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { PROBE_CACHE_MS } from "../explorer/lookup-state.js";
+
 /**
  * Browser-level coverage for the explorer page. A local HTTP server serves the
  * real page files and answers rpc.php with fixed results, so the test needs no
@@ -461,7 +463,13 @@ test(
     ) as { chains: Array<{ name: string; chainId: number }> };
     const chainIds = new Map(presets.chains.map((chain) => [chain.name, chain.chainId]));
 
-    const stats = { delayed: 0, aborted: 0 };
+    // The methods the stub answered, so a test can tell a cached probe from a fresh
+    // one by the calls it did not make.
+    const stats: { delayed: number; aborted: number; counts: Record<string, number> } = {
+      delayed: 0,
+      aborted: 0,
+      counts: {},
+    };
     const files = new Map<string, { body: Buffer; type: string }>();
     for (const [route, name, type] of [
       ["/", "index.html", "text/html; charset=utf-8"],
@@ -524,6 +532,7 @@ test(
           return;
         }
         const body = JSON.parse(await readBody(request)) as { method: string; params?: unknown[] };
+        stats.counts[body.method] = (stats.counts[body.method] ?? 0) + 1;
         const chainId = chainIds.get(url.searchParams.get("chain") ?? "") ?? 1;
         const params = body.params ?? [];
 
@@ -890,6 +899,63 @@ test(
         assert.equal(await session.evaluate<boolean>(`document.getElementById("result").hidden`), true);
         assert.equal(await session.evaluate<string>("location.search"), beforeValidation);
       }
+
+      // A cold table is twelve calls, most of a visitor's minute, so the page keeps
+      // the probe for a short window. The stub counts the methods it answered, so
+      // this is about calls the page did not make, not about what it rendered.
+      const rpcCounts = async () =>
+        (await fetch(`${base}/__stats`, { signal: AbortSignal.timeout(10_000) }).then((response) =>
+          response.json(),
+        )) as { counts: Record<string, number> };
+      const table = `document.querySelector("#chains tbody").innerText.includes("19,000,001")`;
+      const cold = await rpcCounts();
+      assert.ok(
+        await session.evaluate<boolean>(
+          `(() => {
+            const stored = JSON.parse(localStorage.getItem("lwc-explorer-probes") ?? "null");
+            return typeof stored?.savedAt === "number" && Object.keys(stored.probes).length === 6;
+          })()`,
+        ),
+        "a fresh probe is kept for the next load",
+      );
+
+      // The reload renders the cache instead of probing six presets again.
+      await session.send("Page.navigate", { url: `${base}/` });
+      await waitFor(session, table);
+      assert.deepEqual((await rpcCounts()).counts, cold.counts, "a reload inside the window makes no calls");
+
+      // A second tab is the case sessionStorage would miss: the cache is shared.
+      const secondTarget = (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, {
+        method: "PUT",
+        signal: AbortSignal.timeout(15_000),
+      }).then((response) => response.json())) as { webSocketDebuggerUrl: string };
+      const second = await connect(secondTarget.webSocketDebuggerUrl);
+      try {
+        await second.send("Page.enable");
+        await second.send("Runtime.enable");
+        await second.send("Page.navigate", { url: `${base}/` });
+        await waitFor(second, table);
+        assert.deepEqual((await rpcCounts()).counts, cold.counts, "a second tab reuses the cached probe");
+      } finally {
+        second.close();
+      }
+
+      // Past the window the table is paid for again, which is what keeps the cache
+      // from becoming a stale health reading.
+      await session.evaluate(
+        `(() => {
+          const stored = JSON.parse(localStorage.getItem("lwc-explorer-probes"));
+          stored.savedAt = Date.now() - ${PROBE_CACHE_MS + 1_000};
+          localStorage.setItem("lwc-explorer-probes", JSON.stringify(stored));
+          return true;
+        })()`,
+      );
+      await session.send("Page.navigate", { url: `${base}/` });
+      await waitFor(session, table);
+      const stale = await rpcCounts();
+      assert.equal(stale.counts.eth_chainId, (cold.counts.eth_chainId ?? 0) + 6, "an expired cache probes again");
+      assert.equal(stale.counts.eth_blockNumber, (cold.counts.eth_blockNumber ?? 0) + 6);
+      stage("probe cache checked");
     } finally {
       stage("teardown");
       clearTimeout(watchdog);
