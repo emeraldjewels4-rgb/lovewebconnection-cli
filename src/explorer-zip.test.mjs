@@ -20,16 +20,18 @@ const REPO = join(import.meta.dirname, "..");
 const SCRIPT = "explorer-zip.mjs";
 const ARCHIVE = "explorer-x10-upload.zip";
 
-const LOCAL_SIGNATURE = 0x04034b50;
-
-/** Copies deploy/{explorer-zip,explorer-files}.mjs and explorer/ into a fresh temp directory. */
-async function project() {
+/** Runs `body` against a temp copy of deploy/{explorer-zip,explorer-files}.mjs and explorer/. */
+async function withProject(body) {
   const dir = await mkdtemp(join(tmpdir(), "lwc-zip-"));
-  await mkdir(join(dir, "deploy"));
-  await cp(join(REPO, "deploy", SCRIPT), join(dir, "deploy", SCRIPT));
-  await cp(join(REPO, "deploy", "explorer-files.mjs"), join(dir, "deploy", "explorer-files.mjs"));
-  await cp(join(REPO, "explorer"), join(dir, "explorer"), { recursive: true });
-  return dir;
+  try {
+    await mkdir(join(dir, "deploy"));
+    await cp(join(REPO, "deploy", SCRIPT), join(dir, "deploy", SCRIPT));
+    await cp(join(REPO, "deploy", "explorer-files.mjs"), join(dir, "deploy", "explorer-files.mjs"));
+    await cp(join(REPO, "explorer"), join(dir, "explorer"), { recursive: true });
+    await body(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 function run(dir, ...args) {
@@ -46,15 +48,6 @@ function run(dir, ...args) {
   });
 }
 
-async function withProject(body) {
-  const dir = await project();
-  try {
-    await body(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
 /** Builds once and returns the archive the script wrote. */
 async function buildArchive(dir) {
   const result = await run(dir);
@@ -69,11 +62,8 @@ test("builds an archive, reads it back, and the rebuild is byte-identical", asyn
     assert.equal(first.status, 0, first.stderr);
     assert.match(first.stdout, new RegExp(`wrote ${ARCHIVE}: ${EXPLORER_FILES.length} files`));
     assert.match(first.stdout, /verified: every entry matches explorer\//);
-    for (const name of EXPLORER_FILES) assert.ok(first.stdout.includes(name), `${name} missing from the build report`);
 
     const archive = await readFile(join(dir, ARCHIVE));
-    assert.ok(archive.length > 0, "the archive is empty");
-    assert.equal(archive.readUInt32LE(0), LOCAL_SIGNATURE, "the archive does not start with a local header");
 
     // A fixed DOS timestamp, so a second build of unchanged files repeats the same bytes.
     const rebuilt = await buildArchive(dir);

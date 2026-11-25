@@ -1,12 +1,11 @@
 /**
- * The explorer's deployable files, in the order the README lists them.
+ * What the explorer's deploy scripts share: the deployable files, in the order the README lists
+ * them, and the byte formatter both of them print with.
  *
- * Both the FTP uploader and the zip builder read this one list, so a file added
- * to the folder is added to both, and neither can ship a set the other does not.
- * `lookup-state.d.ts` and `README.md` are for the checkout, not the host.
- *
- * The formatter below lives here for the same reason: the uploader's plan and
- * the zip builder's report print the same sizes, and one copy is one style.
+ * Both the FTP uploader and the zip builder read this one list, so a file added to the folder is
+ * added to both, and neither can ship a set the other does not. `lookup-state.d.ts` and `README.md`
+ * are for the checkout, not the host. The formatter is here for the same reason: one copy, one
+ * style, whichever script is printing.
  */
 export const EXPLORER_FILES = [
   "index.html",
