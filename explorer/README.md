@@ -9,9 +9,13 @@ the ten read methods the page itself calls, only as `POST` with
 `application/json`, and only from its own origin, then forwards them to the
 endpoints in `presets.json`, primary first, then fallback. Bodies are capped at
 8 KiB and answers at 1 MiB, which clears a block's hash list (about 80 bytes a
-transaction) while still refusing an unbounded answer. There is no per-IP limit in the PHP: shared
-hosting has no counter to keep, so if the quota is ever abused the fix is a
-Cloudflare rate limit on that path.
+transaction) while still refusing an unbounded answer. Block lookups must ask for
+those hashes: a full-transaction block is roughly twenty times the size
+(541 KB against 28 KB for the same ethereum block) and the page never asks for
+it, so `eth_getBlockByNumber` with anything but `false` as its second parameter
+is refused. There is no per-IP limit in the PHP: shared hosting has no counter
+to keep, so if the quota is ever abused the fix is a Cloudflare rate limit on
+that path.
 
 ## Files
 

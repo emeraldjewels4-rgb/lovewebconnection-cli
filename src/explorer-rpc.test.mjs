@@ -188,6 +188,17 @@ test("a method outside the narrowed set is refused with 400", { skip }, async ()
   }
 });
 
+test("a block asked for with full transactions is refused with 400", { skip }, async () => {
+  // app.js only ever asks for the hash list; full transactions is the shape measured
+  // at 541 KB on ethereum against 28 KB for the same block's hashes.
+  for (const params of [["latest", true], ["latest", 1], ["0x1", "true"]]) {
+    const response = await post(call("eth_getBlockByNumber", params));
+
+    assert.equal(response.status, 400, JSON.stringify(params));
+    assert.match((await response.json()).error.message, /second param must be false/);
+  }
+});
+
 test("an allowed method gets past the gates to the chain lookup", { skip }, async () => {
   // No upstream call: the chain is unknown, which is only reached if the origin,
   // content-type, size and method gates all let the request through.

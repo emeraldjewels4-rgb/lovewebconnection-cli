@@ -19,6 +19,8 @@
  *    body is read, so a large post cannot be buffered.
  *  - Only the ten read methods app.js calls. Nothing here can sign or send a
  *    transaction, and the range-hungry calls the page never makes are absent.
+ *  - Block lookups must ask for transaction hashes: the full-transaction shape is
+ *    ~20 times the size and the page never requests it.
  *  - The upstream answer is capped at 1 MiB and the transfer is aborted past
  *    that, so one request cannot drag an arbitrarily large answer through shared
  *    hosting. The cap has to clear a block: app.js asks eth_getBlockByNumber for
@@ -111,6 +113,14 @@ if (!in_array($request['method'], READ_METHODS, true)) {
 $params = $request['params'] ?? [];
 if (!is_array($params) || count($params) > 4) {
     fail(400, 'params must be an array of at most four values');
+}
+
+// The page reads a block for its header and its transaction count, and asks for the
+// hashes. A full-transaction block measured at 541 KB against 28 KB for the hash
+// list on the same block, so refusing that shape keeps the largest answer this proxy
+// can be made to fetch at a block's hash list instead of near the cap.
+if ($request['method'] === 'eth_getBlockByNumber' && ($params[1] ?? false) !== false) {
+    fail(400, 'blocks are read with their transactions as hashes, so the second param must be false');
 }
 
 $chain = (string) ($_GET['chain'] ?? '');
