@@ -39,6 +39,11 @@ const DELAYED_BLOCK = "0x121eac0"; // 19,000,000, the block the test looks up
 // calls than the real proxy allows inside a minute is refused here too.
 const RATE_LIMIT = 60;
 const RATE_WINDOW_MS = 60_000;
+// A page that boots and probes all six presets is twelve calls, and the stub shares
+// its CPU with every other suite file. Alone that finishes in about a second, but
+// under a full `npm test` the same load has been seen past ten, so a page-state
+// wait gets a deadline that a busy machine can meet and a broken page still cannot.
+const PAGE_READY_MS = 60_000;
 // The same ten methods explorer/rpc.php allows. The stub refuses everything else so a
 // page change that asks for a shape the real proxy rejects fails here as well.
 const READ_METHODS = new Set([
@@ -208,7 +213,26 @@ async function waitFor(session: Session, expression: string, timeoutMs = 10_000)
     }
     await sleep(100);
   }
-  throw new Error(`timed out waiting for: ${expression}`);
+  // The expression alone does not say why it timed out: a table still waiting on
+  // probes, a table whose rows all failed, and a page that never booted are
+  // different problems. Report the page's own state with the timeout.
+  let state: string;
+  try {
+    state = await session.evaluate<string>(
+      `(() => {
+        const summary = document.getElementById("summary")?.textContent ?? "";
+        const rows = document.getElementById("chains")?.innerText ?? "";
+        const stuck = performance
+          .getEntriesByType("resource")
+          .filter((entry) => entry.responseEnd === 0)
+          .map((entry) => entry.name.replace(location.origin, ""));
+        return \`ready=\${document.readyState} summary="\${summary}" rows="\${rows.slice(0, 600)}" unfinished=\${JSON.stringify(stuck.slice(0, 8))}\`;
+      })()`,
+    );
+  } catch {
+    state = "(the page could not be read)";
+  }
+  throw new Error(`timed out waiting for: ${expression}; ${state}`);
 }
 
 function abiString(text: string): string {
@@ -620,6 +644,7 @@ test(
       await waitFor(
         session,
         `document.readyState === "complete" && document.getElementById("result").innerText.includes("USD Coin")`,
+        PAGE_READY_MS,
       );
       stage("deep link rendered");
       const deepLink = await session.evaluate<{ kind: string; chain: string; search: string }>(
@@ -921,7 +946,7 @@ test(
 
       // The reload renders the cache instead of probing six presets again.
       await session.send("Page.navigate", { url: `${base}/` });
-      await waitFor(session, table);
+      await waitFor(session, table, PAGE_READY_MS);
       assert.deepEqual((await rpcCounts()).counts, cold.counts, "a reload inside the window makes no calls");
 
       // A second tab is the case sessionStorage would miss: the cache is shared.
@@ -934,7 +959,7 @@ test(
         await second.send("Page.enable");
         await second.send("Runtime.enable");
         await second.send("Page.navigate", { url: `${base}/` });
-        await waitFor(second, table);
+        await waitFor(second, table, PAGE_READY_MS);
         assert.deepEqual((await rpcCounts()).counts, cold.counts, "a second tab reuses the cached probe");
       } finally {
         second.close();
@@ -951,7 +976,7 @@ test(
         })()`,
       );
       await session.send("Page.navigate", { url: `${base}/` });
-      await waitFor(session, table);
+      await waitFor(session, table, PAGE_READY_MS);
       const stale = await rpcCounts();
       assert.equal(stale.counts.eth_chainId, (cold.counts.eth_chainId ?? 0) + 6, "an expired cache probes again");
       assert.equal(stale.counts.eth_blockNumber, (cold.counts.eth_blockNumber ?? 0) + 6);
