@@ -5,9 +5,10 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 
-// deploy/explorer-check.mjs only sends GETs, so its six checks can be run against a loopback server:
-// no host, no network egress, nothing written. The page is served with CRLF on purpose, because a
-// file manager upload can store it that way and the check is meant to ignore that difference.
+// deploy/explorer-check.mjs sends only GETs apart from one same-origin POST to rpc.php, so its seven
+// checks can be run against a loopback server: no host, no network egress, nothing written. The page
+// is served with CRLF on purpose, because a file manager upload can store it that way and the check
+// is meant to ignore that difference.
 const SCRIPT = join(import.meta.dirname, "..", "deploy", "explorer-check.mjs");
 const PAGE = await readFile(join(import.meta.dirname, "..", "explorer", "index.html"), "utf8");
 const CRLF_PAGE = PAGE.replace(/\n/g, "\r\n");
@@ -22,12 +23,31 @@ function healthyHost() {
       body: "export {};\n",
       headers: { "content-type": "text/javascript", "cache-control": "no-cache, must-revalidate" },
     },
+    // The page's own call: a same-origin POST with a JSON body. This one answers
+    // only when all three hold, which is what the proxy check is meant to prove.
+    "/explorer/rpc.php": (request) => {
+      const answered = request.method === "POST"
+        && request.headers.origin === `http://${request.headers.host}`
+        && (request.headers["content-type"] ?? "") === "application/json";
+      return {
+        status: answered ? 200 : 403,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          answered
+            ? { jsonrpc: "2.0", id: 1, result: "0x1" }
+            : { jsonrpc: "2.0", id: null, error: { code: -32600, message: "not the page's own call" } },
+        ),
+      };
+    },
   };
 }
 
 async function serve(table) {
   const server = createServer((request, response) => {
-    const route = table[request.url ?? ""];
+    const url = request.url ?? "";
+    // The proxy URL carries ?chain=..., so a route may be named by its path alone.
+    const entry = table[url] ?? table[url.split("?")[0]];
+    const route = typeof entry === "function" ? entry(request) : entry;
     response.writeHead(route?.status ?? (route ? 200 : 404), route?.headers ?? { "content-type": "text/html" });
     response.end(route?.body ?? "not found");
   });
@@ -59,12 +79,12 @@ async function check(table) {
   }
 }
 
-test("a host serving the checkout's page passes all six checks, CRLF and all", async () => {
+test("a host serving the checkout's page passes all seven checks, CRLF and all", async () => {
   const result = await check(healthyHost());
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.match(/^ {2}ok {3}/gm)?.length, 6, result.stdout);
-  assert.match(result.stdout, /6 checks passed/);
+  assert.equal(result.stdout.match(/^ {2}ok {3}/gm)?.length, 7, result.stdout);
+  assert.match(result.stdout, /7 checks passed/);
   assert.doesNotMatch(result.stdout, /FAIL/);
 });
 
@@ -74,7 +94,7 @@ test("the directory still landing on the site root's index fails, naming both ch
   assert.equal(result.status, 1);
   assert.match(result.stdout, /FAIL \/explorer\/ is explorer\/index\.html/);
   assert.match(result.stdout, /FAIL the page loads app\.js\?v=/);
-  assert.match(result.stderr, /2 of 6 checks failed/);
+  assert.match(result.stderr, /2 of 7 checks failed/);
 });
 
 test("an app.js cached for a year fails the revalidation check", async () => {
@@ -86,7 +106,30 @@ test("an app.js cached for a year fails the revalidation check", async () => {
   assert.equal(result.status, 1);
   assert.match(result.stdout, /FAIL app\.js is revalidated/);
   assert.match(result.stdout, /cache-control: \(none\)/);
-  assert.match(result.stderr, /1 of 6 checks failed/);
+  assert.match(result.stderr, /1 of 7 checks failed/);
+});
+
+test("a proxy that refuses the page's own origin fails the proxy check", async () => {
+  // What the merged guard returns to a caller that is not the page, and what a
+  // deploy that broke rpc.php would look like: every other check still passes,
+  // the page silently falls back to the public endpoints, and this one fails.
+  const result = await check({
+    ...healthyHost(),
+    "/explorer/rpc.php": {
+      status: 403,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32600, message: "this proxy answers the explorer page it is served with, not other callers" },
+      }),
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /FAIL \/explorer\/rpc\.php answers eth_chainId/);
+  assert.match(result.stdout, /HTTP 403, .*answers the explorer page/);
+  assert.match(result.stderr, /1 of 7 checks failed/);
 });
 
 test("a base that is not an http URL is a usage error, not a failed check", async () => {
