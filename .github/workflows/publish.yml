@@ -49,9 +49,19 @@ jobs:
         run: npm run typecheck
 
       # The browser test has its own workflow step in Tests; a release still
-      # needs the offline suite, but Chrome is not installed on this runner.
+      # needs the offline suite, but Chrome is not installed on this runner. That
+      # one skip is asserted exactly: src/explorer-rpc.test.mjs also skips itself
+      # when the runner has no php, and a substring match would let a release ship
+      # with the proxy checks disabled. php is on ubuntu-latest, so 1 is the count.
       - name: Test
-        run: LWC_SKIP_BROWSER=1 npm test
+        run: |
+          set -euo pipefail
+          LWC_SKIP_BROWSER=1 npm test | tee tests.log
+          if ! grep -qx "ℹ skipped 1" tests.log; then
+            echo "::error::expected exactly 1 skipped test (the browser one); saw:"
+            grep -E "^ℹ (tests|pass|fail|skipped|cancelled) " tests.log || true
+            exit 1
+          fi
 
       - name: Build
         run: |

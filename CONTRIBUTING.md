@@ -11,6 +11,13 @@ the pre-commit hook, which runs `npm run typecheck` and `npm test` on every
 commit. [Setup](README.md#setup) covers the environment file and how to skip the
 hook when you need to.
 
+The hook refuses a commit whose suite skipped more than the browser test. `php`
+stays optional: with it installed, any proxy skip is refused, and without it the
+hook refuses only when the staged files touch `explorer/rpc.php` or
+`src/explorer-rpc.test.mjs`, warning instead for every other change. Set `LWC_PHP`
+to a php binary with `curl` and `openssl` to run those ten cases locally; CI always
+does.
+
 ## Before you commit
 
 ```bash
@@ -27,6 +34,25 @@ page in headless Chrome and skips itself when none is installed. Set
 `CHROME_PATH` to a Chrome, Edge or Chromium binary to run it, or
 `LWC_SKIP_BROWSER=1 npm test` to skip only that file. [Tests](README.md#tests)
 describes the CI steps, including the browser test's separate workflow step.
+
+Install the distro package rather than a downloaded Chrome build: the package
+pulls in the shared libraries (`libnss3`, `libatk`, `libgbm` and friends) that a
+bare download expects and a fresh machine does not have. Then point
+`CHROME_PATH` at the binary. It must be an absolute path — the test looks for a
+file at that path, it does not search `PATH`, so `CHROME_PATH=chromium` finds
+nothing:
+
+| Platform | Install | `CHROME_PATH` |
+| --- | --- | --- |
+| Debian | `sudo apt update && sudo apt install chromium` | `/usr/bin/chromium` |
+| Ubuntu | `sudo snap install chromium` (Chromium is snap-only there) | `/snap/bin/chromium` |
+| Fedora | `sudo dnf install chromium` | `/usr/bin/chromium-browser` |
+| Arch | `sudo pacman -S chromium` | `/usr/bin/chromium` |
+| macOS | `brew install --cask chromium`, or use an installed Chrome | `/Applications/Chromium.app/Contents/MacOS/Chromium` |
+| Windows | `winget install Chromium.Chromium`, or use an installed Chrome | `C:\Program Files\Chromium\Application\chrome.exe` |
+
+`npm test` prints `skipped 1` when the browser test skipped, so a green run with
+that count did not check the page.
 
 ## Scope
 

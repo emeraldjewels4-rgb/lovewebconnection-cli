@@ -456,6 +456,7 @@ const COMMAND_HELP: Record<string, CommandHelp> = {
       ["--api-key <key>", "require this key on the HTTP API"],
       ["--rate-limit <n>", "requests per minute per client"],
       ["--limits-file <path>", "read the serve limits from this file"],
+      ["--trusted-proxy <ip>", "trust X-Forwarded-For only from this proxy address"],
       ["--json", "print the same report as JSON"],
     ],
     readme: "Fixed-price market — README.md#fixed-price-market",

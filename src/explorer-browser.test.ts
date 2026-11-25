@@ -33,6 +33,20 @@ const ERC20 = {
   totalSupply: "0x18160ddd",
 };
 const DELAYED_BLOCK = "0x121eac0"; // 19,000,000, the block the test looks up
+// The same ten methods explorer/rpc.php allows. The stub refuses everything else so a
+// page change that asks for a shape the real proxy rejects fails here as well.
+const READ_METHODS = new Set([
+  "eth_chainId",
+  "eth_blockNumber",
+  "eth_getBalance",
+  "eth_getTransactionCount",
+  "eth_getCode",
+  "eth_getStorageAt",
+  "eth_getBlockByNumber",
+  "eth_getTransactionByHash",
+  "eth_getTransactionReceipt",
+  "eth_call",
+]);
 
 type SocketEvent = { data: unknown };
 type Socket = {
@@ -269,9 +283,14 @@ async function readBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function sendJson(response: ServerResponse, value: unknown): void {
-  response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+function sendJson(response: ServerResponse, value: unknown, status = 200): void {
+  response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(value));
+}
+
+/** The body explorer/rpc.php sends with a refusal, so the page's error path is real. */
+function rpcError(message: string): unknown {
+  return { jsonrpc: "2.0", id: null, error: { code: -32600, message } };
 }
 
 function stopBrowser(child: ChildProcess): void {
@@ -407,10 +426,33 @@ test(
         sendJson(response, stats);
         return;
       }
-      if (url.pathname === "/rpc.php" && request.method === "POST") {
+      if (url.pathname === "/rpc.php") {
+        if (request.method !== "POST") {
+          sendJson(response, rpcError("use POST"), 405);
+          return;
+        }
+        if (!String(request.headers["content-type"] ?? "").includes("application/json")) {
+          sendJson(response, rpcError("content-type must be application/json"), 415);
+          return;
+        }
         const body = JSON.parse(await readBody(request)) as { method: string; params?: unknown[] };
         const chainId = chainIds.get(url.searchParams.get("chain") ?? "") ?? 1;
         const params = body.params ?? [];
+
+        if (!READ_METHODS.has(body.method)) {
+          sendJson(response, rpcError("that method is not part of the explorer's read-only set"), 400);
+          return;
+        }
+        // The page reads a block for its header and its transaction count, so the
+        // real proxy refuses the full-transaction shape; so does this stub.
+        if (body.method === "eth_getBlockByNumber" && params[1] !== false) {
+          sendJson(
+            response,
+            rpcError("blocks are read with their transactions as hashes, so the second param must be false"),
+            400,
+          );
+          return;
+        }
 
         if (body.method === "eth_getBlockByNumber" && params[0] === DELAYED_BLOCK) {
           stats.delayed += 1;
@@ -495,6 +537,40 @@ test(
       assert.match(tokenText, /Decimals\s+6/);
       assert.match(tokenText, /Total supply\s+1,234,567\.89 USDC/);
       assert.match(tokenText, /Contract\s+5 bytes of code/);
+
+      // The stub mirrors explorer/rpc.php, so its refusal branches are only
+      // exercised by something that asks for a refused shape. The page never does;
+      // this asks from the page's own origin and checks the answers a reader would
+      // get, including the wording rpc() would print in the status line.
+      const refusals = await session.evaluate<Array<{ status: number; message: string }>>(`
+        (async () => {
+          const ask = async (init) => {
+            const response = await fetch("rpc.php?chain=ethereum", init);
+            const body = await response.json();
+            return { status: response.status, message: body.error?.message ?? "" };
+          };
+          const json = { "content-type": "application/json" };
+          const call = (method, params) =>
+            JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
+          return [
+            await ask({ method: "GET" }),
+            await ask({ method: "POST", headers: { "content-type": "text/plain" }, body: "{}" }),
+            await ask({ method: "POST", headers: json, body: call("eth_feeHistory", []) }),
+            await ask({ method: "POST", headers: json, body: call("eth_getBlockByNumber", ["latest", true]) }),
+          ];
+        })()
+      `);
+      assert.deepEqual(
+        refusals.map((refusal) => refusal.status),
+        [405, 415, 400, 400],
+        "the stub must refuse what the real proxy refuses",
+      );
+      const refusalMessages = refusals.map((refusal) => refusal.message).join("\n");
+      assert.match(refusalMessages, /use POST/);
+      assert.match(refusalMessages, /application\/json/);
+      assert.match(refusalMessages, /read-only set/);
+      assert.match(refusalMessages, /second param must be false/);
+      stage("stub refusals checked");
 
       await session.evaluate(
         `(() => {

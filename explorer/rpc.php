@@ -4,10 +4,36 @@
  *
  * Public RPC endpoints do not all send CORS headers, so the browser cannot call
  * them directly. This forwards one request at a time to the chain's primary
- * endpoint, then its fallback, and says which one answered. Only read methods
- * are accepted: nothing here can sign or send a transaction. Because the URL is
- * public, it also answers only the page it is served with, and only so many times
- * per minute per address: a free public relay is not what this is for.
+ * endpoint, then its fallback, and says which one answered.
+ *
+ * It is unauthenticated: anyone who finds the path can spend this account's RPC
+ * quota, so what it accepts is deliberately narrow.
+ *
+ *  - POST only, and `content-type: application/json` only. A plain HTML form
+ *    cannot send that type without a preflight, so a stranger's page cannot make
+ *    visitors' browsers post through here.
+ *  - The caller must be the explorer page it is served with: an Origin naming this
+ *    host, or `Sec-Fetch-Site: same-origin`, is required, so a script pointed at
+ *    the URL gets 403. This is a speed bump, not authentication: a script can set
+ *    any Origin it likes, which is what the per-address count below is for.
+ *  - The body is capped at 8 KiB, checked against the declared length before the
+ *    body is read, so a large post cannot be buffered.
+ *  - Only the ten read methods app.js calls. Nothing here can sign or send a
+ *    transaction, and the range-hungry calls the page never makes are absent.
+ *  - Block lookups must ask for transaction hashes: the full-transaction shape is
+ *    ~20 times the size and the page never requests it.
+ *  - The upstream answer is capped at 1 MiB and the transfer is aborted past
+ *    that, so one request cannot drag an arbitrarily large answer through shared
+ *    hosting. The cap has to clear a block: app.js asks eth_getBlockByNumber for
+ *    the hash list, not full transactions, and a hash-list block measured at
+ *    about 80 bytes per transaction, so an ordinary block is tens of kilobytes
+ *    and a busy L2 block with thousands of hashes is a few hundred.
+ *
+ *  - Thirty calls a minute per address, counted in one small locked file under the
+ *    temp directory, so a forged Origin still cannot turn this into a free relay.
+ *    That counter is a backstop; explorer/README.md carries the edge rule
+ *    ("Rate-limit the proxy at the edge") that does the real throttling: which
+ *    path it matches, 60 requests a minute by IP, and what a limited visitor sees.
  */
 declare(strict_types=1);
 
@@ -18,34 +44,23 @@ header('X-Content-Type-Options: nosniff');
 const READ_METHODS = [
     'eth_chainId',
     'eth_blockNumber',
-    'eth_gasPrice',
     'eth_getBalance',
     'eth_getTransactionCount',
     'eth_getCode',
     'eth_getStorageAt',
     'eth_getBlockByNumber',
-    'eth_getBlockByHash',
     'eth_getTransactionByHash',
     'eth_getTransactionReceipt',
     'eth_call',
-    'eth_estimateGas',
-    'eth_feeHistory',
-    'eth_maxPriorityFeePerGas',
-    'net_version',
 ];
 
-/**
- * The proxy is public, so it is also the one place a stranger can spend this
- * account's CPU and the endpoints' own rate limits. Two cheap guards, neither of
- * which changes what may be called:
- *
- * - only the explorer may call it: the browser's same-origin signal must be
- *   present and must name this host. A script pointed at this URL with curl gets
- *   403; forging the header is possible, which is what the second guard is for;
- * - a fixed window per address, counted in one small file so no database is
- *   involved. Thirty calls a minute is well above the page's six probes plus a
- *   lookup, and well below what a relay needs to be useful.
- */
+/** The largest request body accepted, in bytes. */
+const MAX_REQUEST_BYTES = 8192;
+
+/** The largest upstream answer relayed, in bytes; the transfer is cut past this. */
+const MAX_RESPONSE_BYTES = 1048576;
+
+/** Calls allowed per address inside one window, and how long that window is. */
 const RATE_LIMIT = 30;
 const RATE_WINDOW_SECONDS = 60;
 
@@ -71,14 +86,20 @@ function client_ip(): string
  */
 function from_explorer(): bool
 {
-    $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
+    $host = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
     if ($host === '') {
         return false;
     }
     $origin = (string) ($_SERVER['HTTP_ORIGIN'] ?? '');
     if ($origin !== '') {
-        $originHost = parse_url($origin, PHP_URL_HOST);
-        return is_string($originHost) && strcasecmp($originHost, $host) === 0;
+        $parts = parse_url($origin);
+        if (!is_array($parts) || !is_string($parts['host'] ?? null) || $parts['host'] === '') {
+            return false;
+        }
+        // Host and port together: a default port is written in neither, and a page on
+        // a non-default one sends it in both, so the two forms still compare equal.
+        $authority = strtolower($parts['host']) . (isset($parts['port']) ? ':' . $parts['port'] : '');
+        return strcasecmp($authority, $host) === 0;
     }
     return ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '') === 'same-origin';
 }
@@ -143,6 +164,13 @@ function fail(int $status, string $message): void
     exit;
 }
 
+/** The host of an endpoint URL, for messages that should not print the whole URL. */
+function endpoint_host(string $url): string
+{
+    $host = parse_url($url, PHP_URL_HOST);
+    return is_string($host) && $host !== '' ? $host : 'endpoint';
+}
+
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
     fail(405, 'use POST');
 }
@@ -157,7 +185,22 @@ if ($limited) {
     fail(429, 'too many calls from this address; try again in ' . $retryAfter . ' seconds');
 }
 
-$request = json_decode((string) file_get_contents('php://input'), true);
+$contentType = strtolower(trim(explode(';', (string) ($_SERVER['CONTENT_TYPE'] ?? ''), 2)[0]));
+if ($contentType !== 'application/json') {
+    fail(415, 'content-type must be application/json');
+}
+
+// Declared first, so an oversized body is refused before it is read into memory.
+$declared = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
+if ($declared > MAX_REQUEST_BYTES) {
+    fail(413, 'the request body is over ' . MAX_REQUEST_BYTES . ' bytes');
+}
+$raw = (string) file_get_contents('php://input');
+if (strlen($raw) > MAX_REQUEST_BYTES) {
+    fail(413, 'the request body is over ' . MAX_REQUEST_BYTES . ' bytes');
+}
+
+$request = json_decode($raw, true);
 if (!is_array($request) || ($request['jsonrpc'] ?? '') !== '2.0' || !is_string($request['method'] ?? null)) {
     fail(400, 'the body must be a JSON-RPC 2.0 request');
 }
@@ -167,6 +210,14 @@ if (!in_array($request['method'], READ_METHODS, true)) {
 $params = $request['params'] ?? [];
 if (!is_array($params) || count($params) > 4) {
     fail(400, 'params must be an array of at most four values');
+}
+
+// The page reads a block for its header and its transaction count, and asks for the
+// hashes. A full-transaction block measured at 541 KB against 28 KB for the hash
+// list on the same block, so refusing that shape keeps the largest answer this proxy
+// can be made to fetch at a block's hash list instead of near the cap.
+if ($request['method'] === 'eth_getBlockByNumber' && ($params[1] ?? false) !== false) {
+    fail(400, 'blocks are read with their transactions as hashes, so the second param must be false');
 }
 
 $chain = (string) ($_GET['chain'] ?? '');
@@ -204,8 +255,10 @@ foreach (array_values($endpoints) as $index => $url) {
 
     $body = false;
     $status = 0;
+    $tooLarge = false;
 
     if (function_exists('curl_init')) {
+        $buffer = '';
         $handle = curl_init($url);
         curl_setopt_array($handle, [
             CURLOPT_POST => true,
@@ -216,16 +269,36 @@ foreach (array_values($endpoints) as $index => $url) {
             CURLOPT_TIMEOUT => 9,
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_USERAGENT => 'lwc-explorer/1.0 (+read-only)',
+            // Collects the answer here rather than in curl's own buffer, so a body
+            // past the cap is cut off during the transfer instead of after it.
+            CURLOPT_WRITEFUNCTION => static function ($curl, string $chunk) use (&$buffer, &$tooLarge): int {
+                if (strlen($buffer) + strlen($chunk) > MAX_RESPONSE_BYTES) {
+                    $tooLarge = true;
+                    return 0; // aborts the transfer
+                }
+                $buffer .= $chunk;
+                return strlen($chunk);
+            },
         ]);
-        $body = curl_exec($handle);
+        $ok = curl_exec($handle);
         $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
         $error = curl_error($handle);
-        curl_close($handle);
-        if ($body === false) {
-            $problems[] = parse_url($url, PHP_URL_HOST) . ': ' . $error;
+        // No curl_close(): it has had no effect since PHP 8.0 and 8.5 reports it
+        // as deprecated, which prints before the headers and breaks the response.
+        if ($tooLarge) {
+            $problems[] = endpoint_host($url) . ': answer over ' . MAX_RESPONSE_BYTES . ' bytes';
             continue;
         }
+        if ($ok === false) {
+            $problems[] = endpoint_host($url) . ': ' . $error;
+            continue;
+        }
+        $body = $buffer;
     } else {
+        // No curl extension: the stream wrapper still lets the body be read in chunks,
+        // so an answer past the cap is cut off instead of being buffered whole. The
+        // status comes from the stream's own metadata rather than the deprecated
+        // $http_response_header, which PHP 8.5 reports while compiling the file.
         $context = stream_context_create([
             'http' => [
                 'method' => 'POST',
@@ -235,19 +308,32 @@ foreach (array_values($endpoints) as $index => $url) {
                 'ignore_errors' => true,
             ],
         ]);
-        $body = @file_get_contents($url, false, $context);
-        if (isset($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $match)) {
-            $status = (int) $match[1];
-        }
-        if ($body === false) {
-            $problems[] = parse_url($url, PHP_URL_HOST) . ': unreachable';
+        $stream = @fopen($url, 'rb', false, $context);
+        if ($stream === false) {
+            $problems[] = endpoint_host($url) . ': unreachable';
             continue;
         }
+        $buffer = '';
+        while (!feof($stream) && strlen($buffer) <= MAX_RESPONSE_BYTES) {
+            $buffer .= (string) fread($stream, 8192);
+        }
+        $meta = stream_get_meta_data($stream);
+        fclose($stream);
+        foreach ((array) ($meta['wrapper_data'] ?? []) as $line) {
+            if (is_string($line) && preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $match)) {
+                $status = (int) $match[1];
+            }
+        }
+        if (strlen($buffer) > MAX_RESPONSE_BYTES) {
+            $problems[] = endpoint_host($url) . ': answer over ' . MAX_RESPONSE_BYTES . ' bytes';
+            continue;
+        }
+        $body = $buffer;
     }
 
     $decoded = json_decode((string) $body, true);
     if ($status !== 200 || !is_array($decoded) || (!array_key_exists('result', $decoded) && !isset($decoded['error']))) {
-        $problems[] = parse_url($url, PHP_URL_HOST) . ': HTTP ' . $status;
+        $problems[] = endpoint_host($url) . ': HTTP ' . $status;
         continue;
     }
 

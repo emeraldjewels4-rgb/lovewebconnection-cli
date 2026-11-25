@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -92,18 +92,6 @@ test("help is a command, not an unknown one", async () => {
   assert.equal(stderr, "");
 });
 
-test("every command answers a trailing --help with its own usage", async () => {
-  for (const command of await commandsFromHelp()) {
-    const { stdout, stderr } = await runCli([command, "--help"]);
-
-    assert.match(stdout, new RegExp(`^lwc ${command} — `), `${command} heading`);
-    assert.match(stdout, new RegExp(`usage: lwc ${command}\\b`), `${command} usage`);
-    assert.match(stdout, /global options:/, `${command} global options`);
-    assert.match(stdout, /README: /, `${command} README pointer`);
-    assert.equal(stderr, "", `${command} wrote to stderr`);
-  }
-});
-
 test("a command's help lists its own flags and its README section", async () => {
   const { stdout } = await runCli(["balances", "--help"]);
 
@@ -191,3 +179,106 @@ test("a connection failure names the endpoint without its short key", async () =
     /checked endpoint: http:\/\/127\.0\.0\.1:1\/v1\/<redacted>/,
   );
 });
+
+/**
+ * Where each command's own flags are parsed. `chain` and `example` take no flags of their own, and a
+ * command that is missing fails the test below, which is the reminder to add it here.
+ */
+const COMMAND_MODULES: Record<string, string | null> = {
+  chain: null,
+  example: null,
+  presets: "presets.ts",
+  "presets-history": "presets-history.ts",
+  balances: "balances.ts",
+  tokens: "tokenfile.ts",
+  views: "views.ts",
+  signatures: "signatures.ts",
+  call: "call.ts",
+  scan: "scan.ts",
+  compare: "compare.ts",
+  "compare-history": "compare-history.ts",
+  watch: "watch.ts",
+  sessions: "sessions.ts",
+  history: "history.ts",
+  plot: "plot.ts",
+  cache: "cache.ts",
+  market: "market.ts",
+};
+
+/** Answered by the CLI for every command, so they are never a command's own flag. */
+const GLOBAL_FLAGS = new Set([
+  "--chain",
+  "--json",
+  "--cache-file",
+  "--refresh-cache",
+  "--no-cache",
+  "--help",
+]);
+
+/** The flags a command's help lists under `options:`; the global block below it is not its own. */
+function documentedFlags(stdout: string): Set<string> {
+  const own = stdout.split("\n\nglobal options:")[0] ?? "";
+  const flags = new Set<string>();
+  for (const match of own.matchAll(/^ {2}(--[a-z][a-z0-9-]*)/gm)) {
+    const flag = match[1];
+    if (flag) flags.add(flag);
+  }
+  return flags;
+}
+
+/**
+ * The flags a parser source decides on, so a flag merely named in a comment does not count:
+ * equality against a flag, a `startsWith` for its `=value` form, `includes` for one the CLI answers
+ * (`watch --stop`), and a `case`.
+ */
+function parsedFlags(source: string): Set<string> {
+  const flags = new Set<string>();
+  for (const match of source.matchAll(/(?:===|startsWith\(|includes\(|case)\s*["'`](--[a-z][a-z0-9-]*)/g)) {
+    const flag = match[1];
+    if (flag) flags.add(flag);
+  }
+  return flags;
+}
+
+// The help table in cli.ts repeats every flag description by hand, so it can describe a flag a
+// parser no longer takes, and it can fall behind one a parser gained. Both directions are compared
+// against the parser sources because probing lwc cannot tell "accepts" from "ignores": balances and
+// market reject an unknown flag, while plot and signatures skip it.
+test("every command answers a trailing --help with its usage, and the flags its parser takes", async () => {
+  const cli = await readFile(join(import.meta.dirname, "cli.ts"), "utf8");
+  const problems: string[] = [];
+
+  for (const command of await commandsFromHelp()) {
+    const { stdout, stderr } = await runCli([command, "--help"]);
+
+    assert.match(stdout, new RegExp(`^lwc ${command} — `), `${command} heading`);
+    assert.match(stdout, new RegExp(`usage: lwc ${command}\\b`), `${command} usage`);
+    assert.match(stdout, /global options:/, `${command} global options`);
+    assert.match(stdout, /README: /, `${command} README pointer`);
+    assert.equal(stderr, "", `${command} wrote to stderr`);
+
+    if (!(command in COMMAND_MODULES)) {
+      problems.push(`${command}: missing from COMMAND_MODULES, so its flags go unchecked`);
+      continue;
+    }
+    const module = COMMAND_MODULES[command];
+    if (!module) continue;
+
+    const documented = documentedFlags(stdout);
+    const moduleSource = await readFile(join(import.meta.dirname, module), "utf8");
+    // cli.ts counts for the first direction because a few flags are answered there, `watch --stop`
+    // among them; it is left out of the second because it names other commands' flags too.
+    const accepted = parsedFlags(`${moduleSource}\n${cli}`);
+    for (const flag of documented) {
+      if (!GLOBAL_FLAGS.has(flag) && !accepted.has(flag)) {
+        problems.push(`${command}: help lists ${flag}, but ${module} does not parse it`);
+      }
+    }
+    for (const flag of parsedFlags(moduleSource)) {
+      if (!GLOBAL_FLAGS.has(flag) && !documented.has(flag)) {
+        problems.push(`${module} parses ${flag}, but lwc ${command} --help does not list it`);
+      }
+    }
+  }
+
+  assert.deepEqual(problems, [], `help and the parsers disagree:\n  ${problems.join("\n  ")}`);});
