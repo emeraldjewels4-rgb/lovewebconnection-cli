@@ -15,8 +15,36 @@ The hook refuses a commit whose suite skipped more than the browser test. `php`
 stays optional: with it installed, any proxy skip is refused, and without it the
 hook refuses only when the staged files touch `explorer/rpc.php` or
 `src/explorer-rpc.test.mjs`, warning instead for every other change. Set `LWC_PHP`
-to a php binary with `curl` and `openssl` to run those ten cases locally; CI always
-does.
+to a php binary with `curl` and `openssl` to run those twelve cases locally; CI
+always does.
+
+### The proxy tests on Windows
+
+`src/explorer-rpc.test.mjs` needs a PHP CLI with the `curl` extension, and the
+`openssl` CLI on `PATH` to make its loopback certificate. PHP's own OpenSSL
+library is not enough: the test spawns `openssl` by name. The smallest setup
+that gives both, with no package manager and no administrator rights:
+
+1. Download the VS17 x64 zip from <https://windows.php.net/download/> (or run
+   `winget install --id PHP.PHP.NTS.8.4 --scope user`) and extract it to
+   `C:\php84`. Copy `php.ini-development` to `php.ini`, then uncomment
+   `extension=curl` and `extension=openssl`.
+2. Point the hook at that interpreter for future shells:
+   `setx LWC_PHP "C:/php84/php.exe"`.
+3. Append the OpenSSL CLI to the user `PATH` — the one Git for Windows already
+   ships is enough, and appending it cannot shadow an existing tool:
+   `powershell -Command "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';C:\Program Files\Git\usr\bin', 'User')"`.
+
+Open a new terminal, then confirm the three parts:
+
+```bash
+openssl version
+"$LWC_PHP" -m | grep -E '^(curl|openssl)$'
+node --test src/explorer-rpc.test.mjs   # 12 pass
+```
+
+`openssl` resolving from MSYS2's `C:\msys64\ucrt64\bin` also works, but that one
+entry puts a whole toolchain on `PATH`.
 
 ## Before you commit
 
