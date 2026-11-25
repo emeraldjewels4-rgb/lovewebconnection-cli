@@ -538,6 +538,40 @@ test(
       assert.match(tokenText, /Total supply\s+1,234,567\.89 USDC/);
       assert.match(tokenText, /Contract\s+5 bytes of code/);
 
+      // The stub mirrors explorer/rpc.php, so its refusal branches are only
+      // exercised by something that asks for a refused shape. The page never does;
+      // this asks from the page's own origin and checks the answers a reader would
+      // get, including the wording rpc() would print in the status line.
+      const refusals = await session.evaluate<Array<{ status: number; message: string }>>(`
+        (async () => {
+          const ask = async (init) => {
+            const response = await fetch("rpc.php?chain=ethereum", init);
+            const body = await response.json();
+            return { status: response.status, message: body.error?.message ?? "" };
+          };
+          const json = { "content-type": "application/json" };
+          const call = (method, params) =>
+            JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
+          return [
+            await ask({ method: "GET" }),
+            await ask({ method: "POST", headers: { "content-type": "text/plain" }, body: "{}" }),
+            await ask({ method: "POST", headers: json, body: call("eth_feeHistory", []) }),
+            await ask({ method: "POST", headers: json, body: call("eth_getBlockByNumber", ["latest", true]) }),
+          ];
+        })()
+      `);
+      assert.deepEqual(
+        refusals.map((refusal) => refusal.status),
+        [405, 415, 400, 400],
+        "the stub must refuse what the real proxy refuses",
+      );
+      const refusalMessages = refusals.map((refusal) => refusal.message).join("\n");
+      assert.match(refusalMessages, /use POST/);
+      assert.match(refusalMessages, /application\/json/);
+      assert.match(refusalMessages, /read-only set/);
+      assert.match(refusalMessages, /second param must be false/);
+      stage("stub refusals checked");
+
       await session.evaluate(
         `(() => {
           const kind = document.getElementById("kind");

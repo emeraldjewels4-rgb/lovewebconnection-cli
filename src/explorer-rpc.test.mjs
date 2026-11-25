@@ -122,12 +122,24 @@ before(async () => {
   );
 
   const phpPort = await freePort();
-  php = spawn(PHP, ["-S", `127.0.0.1:${phpPort}`, "-t", docroot], {
-    // Trusts the fixture certificate only, for this child process: the proxy's own
-    // certificate verification is untouched.
-    env: { ...process.env, SSL_CERT_FILE: cert },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
+  php = spawn(
+    PHP,
+    [
+      // Trusts the fixture certificate for this child process only; the proxy's own
+      // certificate verification is untouched. The env var covers libcurl builds
+      // that read it, and curl.cainfo covers the ones that configure CAINFO from
+      // the PHP ini instead (Ubuntu's php-cli, as used by CI, needs the ini entry).
+      "-d",
+      `curl.cainfo=${cert}`,
+      "-d",
+      `openssl.cafile=${cert}`,
+      "-S",
+      `127.0.0.1:${phpPort}`,
+      "-t",
+      docroot,
+    ],
+    { env: { ...process.env, SSL_CERT_FILE: cert }, stdio: ["ignore", "ignore", "pipe"] },
+  );
   proxy = `http://127.0.0.1:${phpPort}/rpc.php?chain=test`;
   await waitFor(proxy);
 });
