@@ -17,7 +17,7 @@ endpoints in `presets.json`, primary first, then fallback.
 | `app.js` | Probes the presets, renders the table, runs lookups (tokens read `name`, `symbol`, `decimals` and `totalSupply`; contracts read code and the EIP-1967 slots). |
 | `presets.json` | Generated from `CHAIN_PRESETS`; do not edit by hand. |
 | `rpc.php` | Same-origin read-only JSON-RPC proxy with failover. |
-| `.htaccess` | No directory listing, basic security headers. |
+| `.htaccess` | No directory listing, the folder's own directory index, basic security headers. |
 
 ## Regenerate the preset list
 
@@ -59,10 +59,21 @@ endpoint that sends no CORS header.
 
 1. `npm run explorer:data`
 2. In cPanel, open **File Manager**, go to `public_html`, create `explorer/`.
-3. Upload `index.html`, `style.css`, `app.js`, `presets.json`, `rpc.php` and
-   `.htaccess` (turn on **Settings → Show Hidden Files** so `.htaccess` is
-   visible).
+3. Upload `index.html`, `style.css`, `app.js`, `lookup-state.js`, `presets.json`,
+   `rpc.php` and `.htaccess` (turn on **Settings → Show Hidden Files** so
+   `.htaccess` is visible). `app.js` imports `lookup-state.js`, so leaving it
+   out leaves the page dead.
 4. Open `https://<your-domain>/explorer/`.
+
+Step 4 depends on `.htaccess` pinning `DirectoryIndex index.html`. The site root
+answers a directory request with its own dashboard (`/assets/` behaves the same
+way), and a folder inherits that until it declares an index of its own, which is
+why `/explorer/` used to serve the dashboard while `/explorer/index.html`
+served the explorer. If the folder URL still shows the dashboard after an
+upload, the `.htaccess` did not take effect: look for a 500 at that URL (the
+host rejects `DirectoryIndex` in `.htaccess` when `AllowOverride` leaves out
+`Indexes`) and re-upload the file with **Show Hidden Files** on. When
+`.htaccess` is the only file that changed, uploading it alone is enough.
 
 `index.html` loads `app.js?v=7`. The parent site marks `.js` files immutable for
 a year, so bump that number whenever `app.js` changes; otherwise a browser that

@@ -1,5 +1,11 @@
 Options -Indexes
 
+# The site root answers a directory request with the dashboard at /index.html
+# (/assets/ does the same), so /explorer/ was serving the dashboard rather than
+# this folder. Pin the index here so the folder URL lands on this page; a
+# .htaccess value replaces the inherited one rather than adding to it.
+DirectoryIndex index.html
+
 <IfModule mod_headers.c>
   Header set X-Content-Type-Options "nosniff"
   Header set Referrer-Policy "strict-origin-when-cross-origin"
