@@ -21,7 +21,8 @@
 //
 // Success is silent in the default mode. A failure prints the same report
 // `--check` prints. --json writes one JSON document to stdout in every
-// outcome and keeps the explanation on stderr, so a wrapper can parse stdout.
+// outcome, including a skip (a `missingDocument` with `skipped: true`), and
+// keeps the explanation on stderr, so a wrapper can parse stdout.
 // --strict-missing fails when the history file is absent instead of skipping.
 import {
   PresetsHistoryArgError,
@@ -37,6 +38,23 @@ import {
 
 const DEFAULT_HISTORY = ".lwc-history/presets.jsonl";
 const DEFAULT_THRESHOLD = "95";
+
+/**
+ * The document for a history file that is not there. It mirrors the check's
+ * `gate` shape so a wrapper can read `.gate.passed` without branching on whether
+ * the file existed, while `skipped` says that nothing was judged.
+ */
+function missingDocument(path, threshold, strictMissing) {
+  return {
+    path,
+    skipped: !strictMissing,
+    reason: strictMissing
+      ? "no preset history, and --strict-missing was requested"
+      : "no preset history yet",
+    threshold,
+    gate: { threshold, passed: !strictMissing, shortfalls: [] },
+  };
+}
 
 function usage(message) {
   console.error(`usage error: ${message}`);
@@ -128,6 +146,22 @@ try {
   file = readPresetHistoryFile(args.path);
 } catch (error) {
   if (error?.code === "ENOENT") {
+    // A skip is an outcome too: `--json` promises one document on stdout on
+    // every path, and this is the path the hook is meant to be quiet about, so
+    // a `| jq` wrapper must not meet an empty stream here.
+    if (json) {
+      console.log(
+        JSON.stringify(
+          missingDocument(
+            args.path,
+            args.failUnder ?? Number(thresholdRaw),
+            strictMissing,
+          ),
+          null,
+          2,
+        ),
+      );
+    }
     if (strictMissing) {
       console.error(`error: no preset history at ${args.path}; --strict-missing was requested.`);
       process.exit(1);
