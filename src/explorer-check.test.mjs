@@ -5,13 +5,16 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 
-// deploy/explorer-check.mjs sends only GETs apart from one same-origin POST to rpc.php, so its seven
+// deploy/explorer-check.mjs sends only GETs apart from one same-origin POST to rpc.php, so its nine
 // checks can be run against a loopback server: no host, no network egress, nothing written. The page
-// is served with CRLF on purpose, because a file manager upload can store it that way and the check
-// is meant to ignore that difference.
+// and its scripts are served with CRLF on purpose, because a file manager upload can store them that
+// way and the check is meant to ignore that difference.
 const SCRIPT = join(import.meta.dirname, "..", "deploy", "explorer-check.mjs");
-const PAGE = await readFile(join(import.meta.dirname, "..", "explorer", "index.html"), "utf8");
+const SOURCE = join(import.meta.dirname, "..", "explorer");
+const PAGE = await readFile(join(SOURCE, "index.html"), "utf8");
 const CRLF_PAGE = PAGE.replace(/\n/g, "\r\n");
+const CRLF_APP = (await readFile(join(SOURCE, "app.js"), "utf8")).replace(/\n/g, "\r\n");
+const CRLF_STATE = (await readFile(join(SOURCE, "lookup-state.js"), "utf8")).replace(/\n/g, "\r\n");
 const DASHBOARD = "<!doctype html><title>dashboard</title>";
 
 /** The healthy host: the page, its script, the dashboard, and a 404 for anything else. */
@@ -20,7 +23,11 @@ function healthyHost() {
     "/": { body: DASHBOARD },
     "/explorer/": { body: CRLF_PAGE },
     "/explorer/app.js": {
-      body: "export {};\n",
+      body: CRLF_APP,
+      headers: { "content-type": "text/javascript", "cache-control": "no-cache, must-revalidate" },
+    },
+    "/explorer/lookup-state.js": {
+      body: CRLF_STATE,
       headers: { "content-type": "text/javascript", "cache-control": "no-cache, must-revalidate" },
     },
     // The page's own call: a same-origin POST with a JSON body. This one answers
@@ -79,12 +86,12 @@ async function check(table) {
   }
 }
 
-test("a host serving the checkout's page passes all seven checks, CRLF and all", async () => {
+test("a host serving the checkout's page passes all nine checks, CRLF and all", async () => {
   const result = await check(healthyHost());
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.match(/^ {2}ok {3}/gm)?.length, 7, result.stdout);
-  assert.match(result.stdout, /7 checks passed/);
+  assert.equal(result.stdout.match(/^ {2}ok {3}/gm)?.length, 9, result.stdout);
+  assert.match(result.stdout, /9 checks passed/);
   assert.doesNotMatch(result.stdout, /FAIL/);
 });
 
@@ -94,19 +101,41 @@ test("the directory still landing on the site root's index fails, naming both ch
   assert.equal(result.status, 1);
   assert.match(result.stdout, /FAIL \/explorer\/ is explorer\/index\.html/);
   assert.match(result.stdout, /FAIL the page loads app\.js\?v=/);
-  assert.match(result.stderr, /2 of 7 checks failed/);
+  assert.match(result.stderr, /2 of 9 checks failed/);
 });
 
 test("an app.js cached for a year fails the revalidation check", async () => {
   const result = await check({
     ...healthyHost(),
-    "/explorer/app.js": { body: "export {};\n", headers: { "content-type": "text/javascript" } },
+    "/explorer/app.js": { body: CRLF_APP, headers: { "content-type": "text/javascript" } },
   });
 
   assert.equal(result.status, 1);
   assert.match(result.stdout, /FAIL app\.js is revalidated/);
   assert.match(result.stdout, /cache-control: \(none\)/);
-  assert.match(result.stderr, /1 of 7 checks failed/);
+  assert.match(result.stderr, /1 of 9 checks failed/);
+});
+
+test("scripts left behind by an earlier upload fail by name, page or not", async () => {
+  // The page is the checkout's own and names the checkout's version, so before
+  // these checks a host serving old scripts passed; only the lookups broke.
+  const result = await check({
+    ...healthyHost(),
+    "/explorer/app.js": {
+      body: "// the build an earlier upload left\n",
+      headers: { "content-type": "text/javascript", "cache-control": "no-cache, must-revalidate" },
+    },
+    "/explorer/lookup-state.js": {
+      body: "// the helpers an earlier upload left\n",
+      headers: { "content-type": "text/javascript", "cache-control": "no-cache, must-revalidate" },
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /FAIL \/explorer\/app\.js is explorer\/app\.js/);
+  assert.match(result.stdout, /FAIL \/explorer\/lookup-state\.js is explorer\/lookup-state\.js/);
+  assert.doesNotMatch(result.stdout, /FAIL the page loads/);
+  assert.match(result.stderr, /2 of 9 checks failed/);
 });
 
 test("a proxy that refuses the page's own origin fails the proxy check", async () => {
@@ -129,7 +158,7 @@ test("a proxy that refuses the page's own origin fails the proxy check", async (
   assert.equal(result.status, 1);
   assert.match(result.stdout, /FAIL \/explorer\/rpc\.php answers eth_chainId/);
   assert.match(result.stdout, /HTTP 403, .*answers the explorer page/);
-  assert.match(result.stderr, /1 of 7 checks failed/);
+  assert.match(result.stderr, /1 of 9 checks failed/);
 });
 
 test("a base that is not an http URL is a usage error, not a failed check", async () => {
