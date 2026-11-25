@@ -5,8 +5,12 @@ A static, read-only explorer for the six chains built into
 plus block, address, transaction, token and contract lookups.
 
 Nothing here holds a key, signs, or sends a transaction. `rpc.php` accepts only
-a fixed list of `eth_*`/`net_version` read methods and forwards them to the
-endpoints in `presets.json`, primary first, then fallback.
+the ten read methods the page itself calls, only as `POST` with
+`application/json`, and only from its own origin, then forwards them to the
+endpoints in `presets.json`, primary first, then fallback. Bodies are capped at
+8 KiB and answers at 256 KiB. There is no per-IP limit in the PHP: shared
+hosting has no counter to keep, so if the quota is ever abused the fix is a
+Cloudflare rate limit on that path.
 
 ## Files
 
@@ -41,7 +45,11 @@ helpers live in `lookup-state.js`, imported by `app.js` with a `?v=` query;
 bump that query when the helper file changes. `src/explorer-state.test.ts`
 covers both, and `src/explorer-browser.test.ts` drives the real page in a
 headless Chrome, Edge or Chromium against a stub `rpc.php`; it skips when no
-browser is installed unless `CHROME_PATH` names one.
+browser is installed unless `CHROME_PATH` names one. `src/explorer-rpc.test.mjs`
+checks the proxy's refusals themselves — wrong verb, wrong content type, a
+foreign origin, an oversized body, a method outside the set, an oversized
+answer — against a real `php -S` with a loopback HTTPS fixture; it skips when no
+`php` binary is found unless `LWC_PHP` names one.
 
 ## Run locally
 

@@ -4,8 +4,27 @@
  *
  * Public RPC endpoints do not all send CORS headers, so the browser cannot call
  * them directly. This forwards one request at a time to the chain's primary
- * endpoint, then its fallback, and says which one answered. Only read methods
- * are accepted: nothing here can sign or send a transaction.
+ * endpoint, then its fallback, and says which one answered.
+ *
+ * It is unauthenticated: anyone who finds the path can spend this account's RPC
+ * quota, so what it accepts is deliberately narrow.
+ *
+ *  - POST only, and `content-type: application/json` only. A plain HTML form
+ *    cannot send that type without a preflight, so a stranger's page cannot make
+ *    visitors' browsers post through here.
+ *  - An Origin header, when one is present, must be this site's own, so a page on
+ *    another origin is refused rather than served. This is a speed bump, not
+ *    authentication: a script can set any Origin it likes.
+ *  - The body is capped at 8 KiB, checked against the declared length before the
+ *    body is read, so a large post cannot be buffered.
+ *  - Only the ten read methods app.js calls. Nothing here can sign or send a
+ *    transaction, and the range-hungry calls the page never makes are absent.
+ *  - The upstream answer is capped at 256 KiB and the transfer is aborted past
+ *    that, so one request cannot drag a full block through shared hosting.
+ *
+ * There is no per-IP throttle: a request counter needs shared state that this
+ * file does not have, and the edge is the right place for it. explorer/README.md
+ * records that as the next step if the quota is ever abused.
  */
 declare(strict_types=1);
 
@@ -16,21 +35,21 @@ header('X-Content-Type-Options: nosniff');
 const READ_METHODS = [
     'eth_chainId',
     'eth_blockNumber',
-    'eth_gasPrice',
     'eth_getBalance',
     'eth_getTransactionCount',
     'eth_getCode',
     'eth_getStorageAt',
     'eth_getBlockByNumber',
-    'eth_getBlockByHash',
     'eth_getTransactionByHash',
     'eth_getTransactionReceipt',
     'eth_call',
-    'eth_estimateGas',
-    'eth_feeHistory',
-    'eth_maxPriorityFeePerGas',
-    'net_version',
 ];
+
+/** The largest request body accepted, in bytes. */
+const MAX_REQUEST_BYTES = 8192;
+
+/** The largest upstream answer relayed, in bytes; the transfer is cut past this. */
+const MAX_RESPONSE_BYTES = 262144;
 
 function fail(int $status, string $message): void
 {
@@ -39,11 +58,46 @@ function fail(int $status, string $message): void
     exit;
 }
 
+/** True when the Origin header names this same scheme, host and port. */
+function same_origin(string $origin): bool
+{
+    $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
+    return $host !== '' && strcasecmp(rtrim($origin, '/'), $scheme . '://' . $host) === 0;
+}
+
+/** The host of an endpoint URL, for messages that should not print the whole URL. */
+function endpoint_host(string $url): string
+{
+    $host = parse_url($url, PHP_URL_HOST);
+    return is_string($host) && $host !== '' ? $host : 'endpoint';
+}
+
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
     fail(405, 'use POST');
 }
 
-$request = json_decode((string) file_get_contents('php://input'), true);
+$origin = (string) ($_SERVER['HTTP_ORIGIN'] ?? '');
+if ($origin !== '' && !same_origin($origin)) {
+    fail(403, 'this proxy only answers its own page');
+}
+
+$contentType = strtolower(trim(explode(';', (string) ($_SERVER['CONTENT_TYPE'] ?? ''), 2)[0]));
+if ($contentType !== 'application/json') {
+    fail(415, 'content-type must be application/json');
+}
+
+// Declared first, so an oversized body is refused before it is read into memory.
+$declared = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
+if ($declared > MAX_REQUEST_BYTES) {
+    fail(413, 'the request body is over ' . MAX_REQUEST_BYTES . ' bytes');
+}
+$raw = (string) file_get_contents('php://input');
+if (strlen($raw) > MAX_REQUEST_BYTES) {
+    fail(413, 'the request body is over ' . MAX_REQUEST_BYTES . ' bytes');
+}
+
+$request = json_decode($raw, true);
 if (!is_array($request) || ($request['jsonrpc'] ?? '') !== '2.0' || !is_string($request['method'] ?? null)) {
     fail(400, 'the body must be a JSON-RPC 2.0 request');
 }
@@ -90,8 +144,10 @@ foreach (array_values($endpoints) as $index => $url) {
 
     $body = false;
     $status = 0;
+    $tooLarge = false;
 
     if (function_exists('curl_init')) {
+        $buffer = '';
         $handle = curl_init($url);
         curl_setopt_array($handle, [
             CURLOPT_POST => true,
@@ -102,16 +158,36 @@ foreach (array_values($endpoints) as $index => $url) {
             CURLOPT_TIMEOUT => 9,
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_USERAGENT => 'lwc-explorer/1.0 (+read-only)',
+            // Collects the answer here rather than in curl's own buffer, so a body
+            // past the cap is cut off during the transfer instead of after it.
+            CURLOPT_WRITEFUNCTION => static function ($curl, string $chunk) use (&$buffer, &$tooLarge): int {
+                if (strlen($buffer) + strlen($chunk) > MAX_RESPONSE_BYTES) {
+                    $tooLarge = true;
+                    return 0; // aborts the transfer
+                }
+                $buffer .= $chunk;
+                return strlen($chunk);
+            },
         ]);
-        $body = curl_exec($handle);
+        $ok = curl_exec($handle);
         $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
         $error = curl_error($handle);
-        curl_close($handle);
-        if ($body === false) {
-            $problems[] = parse_url($url, PHP_URL_HOST) . ': ' . $error;
+        // No curl_close(): it has had no effect since PHP 8.0 and 8.5 reports it
+        // as deprecated, which prints before the headers and breaks the response.
+        if ($tooLarge) {
+            $problems[] = endpoint_host($url) . ': answer over ' . MAX_RESPONSE_BYTES . ' bytes';
             continue;
         }
+        if ($ok === false) {
+            $problems[] = endpoint_host($url) . ': ' . $error;
+            continue;
+        }
+        $body = $buffer;
     } else {
+        // No curl extension: the stream wrapper still lets the body be read in chunks,
+        // so an answer past the cap is cut off instead of being buffered whole. The
+        // status comes from the stream's own metadata rather than the deprecated
+        // $http_response_header, which PHP 8.5 reports while compiling the file.
         $context = stream_context_create([
             'http' => [
                 'method' => 'POST',
@@ -121,19 +197,32 @@ foreach (array_values($endpoints) as $index => $url) {
                 'ignore_errors' => true,
             ],
         ]);
-        $body = @file_get_contents($url, false, $context);
-        if (isset($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $match)) {
-            $status = (int) $match[1];
-        }
-        if ($body === false) {
-            $problems[] = parse_url($url, PHP_URL_HOST) . ': unreachable';
+        $stream = @fopen($url, 'rb', false, $context);
+        if ($stream === false) {
+            $problems[] = endpoint_host($url) . ': unreachable';
             continue;
         }
+        $buffer = '';
+        while (!feof($stream) && strlen($buffer) <= MAX_RESPONSE_BYTES) {
+            $buffer .= (string) fread($stream, 8192);
+        }
+        $meta = stream_get_meta_data($stream);
+        fclose($stream);
+        foreach ((array) ($meta['wrapper_data'] ?? []) as $line) {
+            if (is_string($line) && preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $match)) {
+                $status = (int) $match[1];
+            }
+        }
+        if (strlen($buffer) > MAX_RESPONSE_BYTES) {
+            $problems[] = endpoint_host($url) . ': answer over ' . MAX_RESPONSE_BYTES . ' bytes';
+            continue;
+        }
+        $body = $buffer;
     }
 
     $decoded = json_decode((string) $body, true);
     if ($status !== 200 || !is_array($decoded) || (!array_key_exists('result', $decoded) && !isset($decoded['error']))) {
-        $problems[] = parse_url($url, PHP_URL_HOST) . ': HTTP ' . $status;
+        $problems[] = endpoint_host($url) . ': HTTP ' . $status;
         continue;
     }
 
