@@ -22,11 +22,24 @@ It runs from `public_html/scan/`, with credentials in `public_html/scan/config.p
 hand from `config.sample.php`, never in a package) and a cron job every five minutes:
 
 ```sh
-/usr/local/bin/php /home/<account>/public_html/scan/api.php ingest
+*/5 * * * * /usr/local/bin/php /home/<account>/public_html/scan/api.php ingest >> /home/<account>/logs/scan-ingest.log 2>&1
 ```
 
 The HTTP form works too — `/scan/api.php?r=ingest&key=<cron_key>` — for anything that would rather call
 a URL than start a process.
+
+## How often it runs
+
+Every five minutes, and that interval is arithmetic rather than preference. `tuning.php` ships the run
+limits as floors — `api.php` takes the larger of the tuning file and `config.php` — so one run spends at
+most 120 seconds on the clock, plus the block fetch already in flight when that budget runs out: with
+the 25-second RPC timeout and the receipt call behind it, roughly 165 seconds in the worst case.
+`batch` is 1000 blocks and never binds, because the clock stops the loop long before the count does.
+
+Nothing in `api.php` takes a lock — no `flock`, no `GET_LOCK` — so a second run is a second writer on
+the `progress` row, which is how a block is ingested twice or skipped. The interval therefore has to
+clear the worst-case run and not the typical one: five minutes leaves over two minutes of margin,
+while `*/2` is 120 seconds — shorter than one run — and would start it on top of another.
 
 ## The seven tables
 
