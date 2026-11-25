@@ -78,15 +78,19 @@ async function serve(table) {
   };
 }
 
-function runCheck(base) {
+function runScript(args) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [SCRIPT, "--base", base], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [SCRIPT, ...args], { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
     child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
     child.on("close", (status) => resolve({ status, stdout, stderr }));
   });
+}
+
+function runCheck(base) {
+  return runScript(["--base", base]);
 }
 
 async function check(table) {
@@ -220,6 +224,44 @@ test("a proxy that refuses the page's own origin fails the proxy check", async (
   assert.match(result.stdout, /FAIL \/explorer\/rpc\.php answers eth_chainId/);
   assert.match(result.stdout, /HTTP 403, .*answers the explorer page/);
   assert.match(result.stderr, /1 of 11 checks failed/);
+});
+
+test("the usage list numbers every check once and names only compared files", async () => {
+  // The help list is written by hand beside the checks it describes, so a check
+  // inserted without renumbering, or one dropped from the list, would otherwise
+  // drift silently. The compared files are read out of the script's own source,
+  // so listing a file it does not compare fails here rather than in a deploy.
+  const source = await readFile(SCRIPT, "utf8");
+  const count = Number(/const CHECK_COUNT = (\d+);/.exec(source)?.[1]);
+  assert.ok(Number.isInteger(count) && count > 0, "CHECK_COUNT is declared in the script");
+
+  const compared = [...source.matchAll(/join\(SOURCE_DIR, "([^"]+)"\)/g)].map(([, name]) => name);
+  assert.ok(compared.length > 0, "the script reads its files through SOURCE_DIR");
+
+  const result = await runScript(["--help"]);
+  assert.equal(result.status, 0, result.stderr);
+  // Only the numbered entries start a check's line; a wrapped entry continues on
+  // an indented line of its own, so those are not counted twice. The numbers are
+  // padded to the same column, so a one-digit entry has two spaces after it and a
+  // two-digit one a single space.
+  const entries = [...result.stdout.matchAll(/^ {2}(\d+) +(.+)$/gm)].map(([, number, text]) => ({
+    number: Number(number),
+    text,
+  }));
+
+  assert.deepEqual(
+    entries.map((entry) => entry.number),
+    Array.from({ length: count }, (_, index) => index + 1),
+    "the usage list runs 1 to CHECK_COUNT with no gaps or repeats",
+  );
+
+  const named = entries.flatMap((entry) => entry.text.match(/[\w-]+\.(?:html|js|css|json)\b/g) ?? []);
+  for (const name of named) {
+    assert.ok(compared.includes(name), `the usage list names ${name}, which the script compares`);
+  }
+  for (const name of compared) {
+    assert.ok(named.includes(name), `${name} is compared, so the usage list names it`);
+  }
 });
 
 test("a base that is not an http URL is a usage error, not a failed check", async () => {
