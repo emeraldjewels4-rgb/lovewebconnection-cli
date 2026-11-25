@@ -29,11 +29,13 @@
  *    about 80 bytes per transaction, so an ordinary block is tens of kilobytes
  *    and a busy L2 block with thousands of hashes is a few hundred.
  *
- *  - Thirty calls a minute per address, counted in one small locked file under the
+ *  - Sixty calls a minute per address, counted in one small locked file under the
  *    temp directory, so a forged Origin still cannot turn this into a free relay.
- *    That counter is a backstop; explorer/README.md carries the edge rule
- *    ("Rate-limit the proxy at the edge") that does the real throttling: which
- *    path it matches, 60 requests a minute by IP, and what a limited visitor sees.
+ *    That counter is a backstop and carries the edge rule's own number:
+ *    explorer/README.md ("Rate-limit the proxy at the edge") sets 60 requests a
+ *    minute by IP in front of PHP, which is what a visitor should meet first;
+ *    this file only caps what a missing or mis-scoped rule would let through.
+ *    explorer/README.md also works out what one visit spends of that 60.
  */
 declare(strict_types=1);
 
@@ -60,8 +62,12 @@ const MAX_REQUEST_BYTES = 8192;
 /** The largest upstream answer relayed, in bytes; the transfer is cut past this. */
 const MAX_RESPONSE_BYTES = 1048576;
 
-/** Calls allowed per address inside one window, and how long that window is. */
-const RATE_LIMIT = 30;
+/**
+ * Calls allowed per address inside one window, and how long that window is. The
+ * window matches the edge rule's 60 requests a minute, so this backstop never
+ * refuses a visitor the WAF would have let through.
+ */
+const RATE_LIMIT = 60;
 const RATE_WINDOW_SECONDS = 60;
 
 /** The address the request came from. No forwarding header is trusted here. */
