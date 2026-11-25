@@ -14,8 +14,8 @@ those hashes: a full-transaction block is roughly twenty times the size
 (541 KB against 28 KB for the same ethereum block) and the page never asks for
 it, so `eth_getBlockByNumber` with anything but `false` as its second parameter
 is refused. There is no per-IP limit in the PHP: shared hosting has no counter
-to keep, so if the quota is ever abused the fix is a Cloudflare rate limit on
-that path.
+to keep, so the cap on how fast a stranger can spend the quota belongs at the
+edge — see [Rate-limit the proxy at the edge](#rate-limit-the-proxy-at-the-edge).
 
 ## Files
 
@@ -110,6 +110,60 @@ If the page says `presets.json` cannot be loaded, confirm it was uploaded as
 `application/json` and not HTML. If `rpc.php` downloads instead of running,
 select **PHP 8.x** for the account and make sure the `php` handler is enabled
 for `.php`.
+
+## Rate-limit the proxy at the edge
+
+`rpc.php` has no per-IP counter and no place to keep one on shared hosting, so
+the limit goes in front of the host. On Cloudflare that is one rule, applied
+before PHP runs: a blocked request costs no PHP time and no RPC quota.
+
+1. Cloudflare dashboard → the site's zone → **Security → WAF → Rate limiting
+   rules → Create rule**.
+2. Name it `explorer rpc`.
+3. **When incoming requests match** → *Custom filter expression*:
+   `starts_with(http.request.uri.path, "/explorer/rpc.php")`. If the explorer is
+   at the root of its own subdomain (Option A below), use
+   `http.request.uri.path eq "/rpc.php"` instead.
+4. **Rate**: 60 requests per 1 minute, **counting by IP**. Optionally add a
+   second rule on the same path for bursts: 20 requests per 10 seconds.
+5. **Action**: Block.
+
+Why 60: a page load probes all six chains twice, chain id and block number, so
+12 requests, and a lookup costs one to four more. That leaves a reader four page
+loads a minute while capping an abuser at roughly 60 MiB a minute at the 1 MiB
+answer cap. The count is per IP, so an office behind one address shares it.
+
+**What a limited visitor sees.** Cloudflare's Block action answers 429 with
+Cloudflare's own HTML page, not JSON, so the page treats it the way it treats any
+non-JSON answer from `rpc.php`: it stops using the proxy for the rest of that
+page load and calls the public endpoints directly. A lookup then either answers
+with the status line reading “answered by the endpoint directly”, or fails with
+`no endpoint answered`, or names a host and says `Failed to fetch` when the
+browser blocks the cross-origin call. A reload after the minute passes goes back
+through the proxy. The “rpc.php is not answering” note under the form does not
+appear: it is rendered once when the page loads, and by then the limit had not
+been hit.
+
+If your plan lets a rate limiting rule return a custom response, set
+`application/json` and this body, and the status line prints the message
+verbatim instead of falling back:
+
+```json
+{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"this proxy is rate limited; try again in a minute"}}
+```
+
+**Check the rule after saving.** Send more than 60 requests inside a minute and
+watch the tail turn 429; the counter clears within a minute, so a 200 after the
+wait means the rule is live and not stuck:
+
+```sh
+for i in $(seq 1 70); do
+  curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+    -H 'content-type: application/json' \
+    --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
+    https://<your-domain>/explorer/rpc.php
+done | tail -5
+```
 
 ## Point a domain at it
 
