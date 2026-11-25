@@ -104,7 +104,29 @@ echo "pre-commit: typecheck"
 npm run typecheck
 
 echo "pre-commit: tests"
-npm test
+# Two tests skip themselves rather than fail: the browser one when no Chrome, Edge
+# or Chromium is installed, and src/explorer-rpc.test.mjs when there is no php (or
+# no openssl) to serve its fixture. A skip exits 0, so a machine without php used to
+# commit happily with ten proxy cases silently doing nothing. The suite's own
+# summary is therefore asserted: 0 skips with a browser present, 1 with the browser
+# missing, and anything above that is a check that stopped checking, so the commit
+# is refused with the counts and the reason the proxy file leaves first.
+test_log=$(mktemp)
+if ! npm test 2>&1 | tee "$test_log"; then
+  rm -f "$test_log"
+  exit 1
+fi
+if ! grep -Eq "^ℹ skipped [01]$" "$test_log"; then
+  echo ""
+  echo "  REFUSED: the suite skipped more than the browser test, so a check did not run."
+  grep -E "^ℹ (tests|pass|fail|skipped|cancelled) " "$test_log" | sed 's/^/        /'
+  echo "        src/explorer-rpc.test.mjs needs php with curl and openssl; install them"
+  echo "        or set LWC_PHP to a php binary. Run it alone to see why:"
+  echo "            node --test src/explorer-rpc.test.mjs"
+  rm -f "$test_log"
+  exit 2
+fi
+rm -f "$test_log"
 
 # Inert until a preset history is recorded; skips when the file does not exist.
 echo "pre-commit: preset gate"
