@@ -33,6 +33,10 @@ app; its tables and restore steps are in [`../docs/scan-index.md`](../docs/scan-
 | `rpc.php` | Same-origin read-only JSON-RPC proxy with failover. |
 | `.htaccess` | No directory listing, the folder's own directory index, basic security headers. |
 
+The document root's `.htaccess` is not in this folder and not in this repo: it
+is shared with every other app on the host. The one rule the explorer needs from
+it is in [Deploy to x10 / cPanel](#deploy-to-x10--cpanel).
+
 ## Regenerate the preset list
 
 ```sh
@@ -91,15 +95,41 @@ wanted; `npm run explorer:zip:check` fails if an existing copy no longer matches
 the folder, and the pre-commit hook runs that check when one is present, because
 a stale zip uploads a page the checkout no longer has.
 
-Step 4 depends on `.htaccess` pinning `DirectoryIndex index.html`. The site root
-answers a directory request with its own dashboard (`/assets/` behaves the same
-way), and a folder inherits that until it declares an index of its own, which is
-why `/explorer/` used to serve the dashboard while `/explorer/index.html`
-served the explorer. If the folder URL still shows the dashboard after an
-upload, the `.htaccess` did not take effect: look for a 500 at that URL (the
-host rejects `DirectoryIndex` in `.htaccess` when `AllowOverride` leaves out
-`Indexes`) and re-upload the file with **Show Hidden Files** on. When
-`.htaccess` is the only file that changed, uploading it alone is enough.
+`deploy/explorer-sftp-ship.mjs` is the upload-and-check route when the host has
+an SFTP login and a key: it sends `index.html`, `app.js`, `style.css` and
+`rpc.php` to `--remote-dir` (default `public_html/explorer`), then runs
+`deploy/explorer-check.mjs` against `--base` and fails if any check does. It
+does not send `lookup-state.js`, `presets.json` or `.htaccess`; use the zip or
+the file manager when one of those changes. `--dry-run` prints the batch and
+the check command without connecting.
+
+Step 4 also needs a line in the document root's `.htaccess`. This host answers a
+request for an existing directory with its dashboard (`/assets/` behaves the
+same way), because `RewriteCond %{REQUEST_FILENAME} -d` followed by
+`RewriteRule . /index.html [L]` runs before the folder's own `DirectoryIndex`:
+that is why `/explorer/` used to serve the dashboard while
+`/explorer/index.html` served the explorer. The explorer therefore gets a rule
+of its own beside `^scan/?$` and `^exchange/?$`, ahead of the directory rule:
+
+```apache
+RewriteRule ^explorer/?$ explorer/index.html [L]
+```
+
+That file is shared with every other app on the document root, so this repo does
+not keep a copy of it; the line is added by hand in cPanel → **File Manager**
+(**Settings → Show Hidden Files**), and re-applied by hand if someone redeploys
+the root file. The folder's own `.htaccess` still pins `DirectoryIndex` as a
+fallback for hosts whose root does not rewrite, but on this one the root rule
+answers first and the folder file never gets the request.
+
+With the line in place, every check in `npm run explorer:check` passes. Without
+it, checks 2 and 3 stay red — check 2 reporting the dashboard's byte count
+against the checkout's, check 3 because that page never asks for `app.js?v=8` —
+while checks 1 and 4-9 pass. That is the signature of a routing miss, not a
+failed upload, and `deploy/explorer-sftp-ship.mjs` reports it that way. If
+`/explorer/` is still the dashboard after the line is in, look for a 500 at that
+URL (the host rejects `RewriteRule` in `.htaccess` when `AllowOverride` leaves
+out `FileInfo`) and re-upload with hidden files shown.
 
 The next section uploads the same seven files over SSH from a shell instead.
 
