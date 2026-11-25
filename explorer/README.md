@@ -49,8 +49,9 @@ previous one so only the newest stays in flight. The URL and lookup-lifecycle
 helpers live in `lookup-state.js`, imported by `app.js` with a `?v=` query;
 bump that query when the helper file changes. `src/explorer-state.test.ts`
 covers both, and `src/explorer-browser.test.ts` drives the real page in a
-headless Chrome, Edge or Chromium against a stub `rpc.php`; it skips when no
-browser is installed unless `CHROME_PATH` names one. `src/explorer-rpc.test.mjs`
+headless Chrome, Edge or Chromium against a stub `rpc.php` that refuses the same
+requests the real proxy refuses; it skips when no browser is installed unless
+`CHROME_PATH` names one. `src/explorer-rpc.test.mjs`
 checks the proxy's refusals themselves — wrong verb, wrong content type, a
 foreign origin, an oversized body, a method outside the set, an oversized
 answer — against a real `php -S` with a loopback HTTPS fixture; it skips when no
