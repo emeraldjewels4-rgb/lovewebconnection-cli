@@ -34,8 +34,11 @@ for db in fiatgodx_fiatlord fiatgodx_lovewebconnection fiatgodx_scan \
 
     # A database that is not there is skipped, not failed: fiatgodx_scan was dropped once and
     # recreated later, and that must not read as five broken backups.
+    # The database name is passed bare, without --databases. That flag writes `CREATE DATABASE` and
+    # `USE \`db\`` into the dump, and an importer follows them: loading such a file into a scratch
+    # database in phpMyAdmin would switch to the live one and run the dump's DROP TABLE against it.
     if ! mysqldump --defaults-extra-file="$CNF" --single-transaction --quick \
-            --routines --triggers --databases "$db" >"$out" 2>>"$HOME/backups/error.log"; then
+            --routines --triggers "$db" >"$out" 2>>"$HOME/backups/error.log"; then
         echo "$(date -u +%FT%TZ) FAILED $db (mysqldump)" >&2
         rm -f "$out"
         failures=$((failures + 1))
